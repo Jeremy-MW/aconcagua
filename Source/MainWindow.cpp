@@ -2,23 +2,44 @@
 
 MainWindow::MainWindow(const juce::String& name, juce::ApplicationProperties& properties)
     : DocumentWindow(name, juce::Colour(0xff1e1e2e), DocumentWindow::allButtons),
-      mainContent(properties)
+      mainContent(properties),
+      appProperties(properties)
 {
     setUsingNativeTitleBar(true);
     setContentNonOwned(&mainContent, true);
     setResizable(true, true);
-    centreWithSize(900, 600);
+
+    auto savedState = appProperties.getUserSettings() != nullptr
+                        ? appProperties.getUserSettings()->getValue("mainWindowState", "")
+                        : juce::String{};
+
+    if (savedState.isNotEmpty() && restoreWindowStateFromString(savedState))
+    {
+        // restored
+    }
+    else
+    {
+        centreWithSize(900, 600);
+    }
+
     setVisible(true);
 }
 
 void MainWindow::closeButtonPressed()
 {
+    if (auto* props = appProperties.getUserSettings())
+    {
+        props->setValue("mainWindowState", getWindowStateAsString());
+        props->saveIfNeeded();
+    }
+
     juce::JUCEApplication::getInstance()->systemRequestedQuit();
 }
 
 MainWindow::MainContent::MainContent(juce::ApplicationProperties& properties)
     : appProperties(properties),
-      configTab(pluginLoader, benchmarkEngine, properties)
+      configTab(pluginLoader, benchmarkEngine, properties),
+      resultsTab(properties)
 {
     auto tabColour = juce::Colour(0xff1e1e2e);
     tabs.addTab("Config", tabColour, &configTab, false);

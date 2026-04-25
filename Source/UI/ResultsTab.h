@@ -9,7 +9,7 @@ class ResultsTab : public juce::Component,
                    public juce::TableListBoxModel
 {
 public:
-    ResultsTab();
+    ResultsTab(juce::ApplicationProperties& properties);
     void resized() override;
     void paint(juce::Graphics& g) override;
 
@@ -57,6 +57,7 @@ private:
         OverBudgetCol
     };
 
+    juce::ApplicationProperties& appProperties;
     std::vector<BenchmarkResult> results;
 
     // Latest run stats panel
@@ -69,6 +70,7 @@ private:
 
     juce::TextButton retestButton { "Re-test" };
     juce::TextButton clearButton { "Clear" };
+    juce::TextButton importButton { "Import" };
     juce::TextButton exportRunButton { "Export Run" };
     juce::TextButton exportAllButton { "Export All" };
     std::unique_ptr<juce::FileChooser> fileChooser;
@@ -77,6 +79,7 @@ private:
     void updateLatestStats();
     void deleteResultAtRow(int rowNumber);
     void showDeleteMenuForRow(int rowNumber, juce::Component* targetComponent);
+    void importClicked();
     void exportRunClicked();
     void exportAllClicked();
 
