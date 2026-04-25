@@ -35,7 +35,8 @@ struct BenchmarkResult
         xml->setAttribute("blockSize", config.blockSize);
         xml->setAttribute("numBlocks", config.numBlocks);
         xml->setAttribute("sampleRate", config.sampleRate);
-        xml->setAttribute("numChannels", config.numChannels);
+        xml->setAttribute("numInputChannels", config.numInputChannels);
+        xml->setAttribute("numOutputChannels", config.numOutputChannels);
         xml->setAttribute("numMidiNotes", config.numMidiNotes);
         xml->setAttribute("inputType", static_cast<int>(config.inputType));
 
@@ -59,7 +60,9 @@ struct BenchmarkResult
         r.config.blockSize = xml.getIntAttribute("blockSize", 512);
         r.config.numBlocks = xml.getIntAttribute("numBlocks", 10000);
         r.config.sampleRate = xml.getDoubleAttribute("sampleRate", 44100.0);
-        r.config.numChannels = xml.getIntAttribute("numChannels", 2);
+        const int legacyNumChannels = xml.getIntAttribute("numChannels", 2);
+        r.config.numInputChannels  = xml.getIntAttribute("numInputChannels",  legacyNumChannels);
+        r.config.numOutputChannels = xml.getIntAttribute("numOutputChannels", legacyNumChannels);
         r.config.numMidiNotes = xml.getIntAttribute("numMidiNotes", 0);
         r.config.inputType = static_cast<InputType>(xml.getIntAttribute("inputType", 0));
 

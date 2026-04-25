@@ -18,7 +18,8 @@ public:
 
     bool acceptsMidi() const;
 
-    void preparePlugin(double sampleRate, int blockSize, int numChannels);
+    void preparePlugin(double sampleRate, int blockSize,
+                       int numInputChannels, int numOutputChannels);
     void releasePlugin();
 
 private:

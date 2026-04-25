@@ -1,5 +1,29 @@
 #include "ConfigTab.h"
 
+namespace
+{
+    // Channel-count combo entries, shared by input and output selectors.
+    struct ChannelOption { const char* label; int count; };
+    constexpr ChannelOption kChannelOptions[] = {
+        { "Mono",   1 },
+        { "Stereo", 2 },
+        { "5.1",    6 },
+        { "7.1",    8 }
+    };
+
+    void populateChannelCombo(juce::ComboBox& box)
+    {
+        for (int i = 0; i < (int) std::size(kChannelOptions); ++i)
+            box.addItem(kChannelOptions[i].label, i + 1);
+    }
+
+    int channelCountForId(int id)
+    {
+        const int idx = juce::jlimit(1, (int) std::size(kChannelOptions), id) - 1;
+        return kChannelOptions[idx].count;
+    }
+}
+
 ConfigTab::ConfigTab(PluginLoader& loader, BenchmarkEngine& engine, juce::ApplicationProperties& properties)
     : pluginLoader(loader), benchmarkEngine(engine), appProperties(properties)
 {
@@ -16,6 +40,14 @@ ConfigTab::ConfigTab(PluginLoader& loader, BenchmarkEngine& engine, juce::Applic
     blockSizeSlider.setRange(2, 2000, 1);
     blockSizeSlider.setValue(512);
     blockSizeSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 60, 24);
+    blockSizeSlider.onDragEnd  = [this] { applyPlayConfigAndStartPump(); };
+    blockSizeSlider.onValueChange = [this]
+    {
+        // Apply only when the user has released the mouse for sliders to avoid
+        // re-preparing on every pixel.
+        if (! blockSizeSlider.isMouseButtonDown())
+            applyPlayConfigAndStartPump();
+    };
     addAndMakeVisible(blockSizeSlider);
 
     // Number of blocks
@@ -34,16 +66,22 @@ ConfigTab::ConfigTab(PluginLoader& loader, BenchmarkEngine& engine, juce::Applic
     sampleRateBox.addItem("96000", 4);
     sampleRateBox.addItem("192000", 5);
     sampleRateBox.setSelectedId(1);
+    sampleRateBox.onChange = [this] { applyPlayConfigAndStartPump(); };
     addAndMakeVisible(sampleRateBox);
 
-    // Channel config
-    addAndMakeVisible(channelConfigLabel);
-    channelConfigBox.addItem("Mono", 1);
-    channelConfigBox.addItem("Stereo", 2);
-    channelConfigBox.addItem("5.1", 3);
-    channelConfigBox.addItem("7.1", 4);
-    channelConfigBox.setSelectedId(2);
-    addAndMakeVisible(channelConfigBox);
+    // Input channels
+    addAndMakeVisible(inputChannelsLabel);
+    populateChannelCombo(inputChannelsBox);
+    inputChannelsBox.setSelectedId(2);
+    inputChannelsBox.onChange = [this] { applyPlayConfigAndStartPump(); };
+    addAndMakeVisible(inputChannelsBox);
+
+    // Output channels
+    addAndMakeVisible(outputChannelsLabel);
+    populateChannelCombo(outputChannelsBox);
+    outputChannelsBox.setSelectedId(2);
+    outputChannelsBox.onChange = [this] { applyPlayConfigAndStartPump(); };
+    addAndMakeVisible(outputChannelsBox);
 
     // MIDI notes
     addAndMakeVisible(numMidiNotesLabel);
@@ -87,6 +125,7 @@ ConfigTab::ConfigTab(PluginLoader& loader, BenchmarkEngine& engine, juce::Applic
 ConfigTab::~ConfigTab()
 {
     saveParameters();
+    stopPumpAndRelease();
 }
 
 void ConfigTab::resized()
@@ -114,12 +153,13 @@ void ConfigTab::resized()
         area.removeFromTop(spacing);
     };
 
-    layoutRow(blockSizeLabel, blockSizeSlider);
-    layoutRow(numBlocksLabel, numBlocksSlider);
-    layoutRow(sampleRateLabel, sampleRateBox);
-    layoutRow(channelConfigLabel, channelConfigBox);
-    layoutRow(numMidiNotesLabel, numMidiNotesSlider);
-    layoutRow(inputTypeLabel, inputTypeBox);
+    layoutRow(blockSizeLabel,      blockSizeSlider);
+    layoutRow(numBlocksLabel,      numBlocksSlider);
+    layoutRow(sampleRateLabel,     sampleRateBox);
+    layoutRow(inputChannelsLabel,  inputChannelsBox);
+    layoutRow(outputChannelsLabel, outputChannelsBox);
+    layoutRow(numMidiNotesLabel,   numMidiNotesSlider);
+    layoutRow(inputTypeLabel,      inputTypeBox);
 
     area.removeFromTop(spacing);
 
@@ -140,6 +180,7 @@ void ConfigTab::paint(juce::Graphics& g)
 void ConfigTab::loadPluginFromFile(const juce::File& file)
 {
     editorWindow.reset();
+    stopPumpAndRelease();
 
     pluginLoader.loadPlugin(file, [this, file](const juce::String& error)
     {
@@ -158,6 +199,10 @@ void ConfigTab::loadPluginFromFile(const juce::File& file)
                 props->setValue("lastBrowseDirectory", file.getParentDirectory().getFullPathName());
                 props->saveIfNeeded();
             }
+
+            // Apply current config and start the idle pump immediately so the
+            // plugin reaches a warmed-up steady state before the user benchmarks.
+            applyPlayConfigAndStartPump();
         }
         else
         {
@@ -170,7 +215,6 @@ void ConfigTab::loadPluginFromFile(const juce::File& file)
 
 void ConfigTab::loadPluginClicked()
 {
-    // Restore last browse directory, or fall back to common VST3 location
     juce::File startDir = juce::File::getSpecialLocation(juce::File::commonApplicationDataDirectory)
                               .getChildFile("VST3");
 
@@ -204,12 +248,16 @@ void ConfigTab::loadPluginClicked()
 
 void ConfigTab::goClicked()
 {
-    if (!pluginLoader.isPluginLoaded() || benchmarkEngine.isRunning())
+    if (! pluginLoader.isPluginLoaded() || benchmarkEngine.isRunning())
         return;
 
     goButton.setEnabled(false);
     loadButton.setEnabled(false);
     statusLabel.setText("Running benchmark...", juce::dontSendNotification);
+
+    // Hand the plugin off from the idle pump to the benchmark engine. The
+    // plugin remains prepared across this transition.
+    idlePump.stop();
 
     auto config = gatherConfig();
 
@@ -225,6 +273,9 @@ void ConfigTab::goClicked()
                                 + juce::String(result.avgUs, 1) + " us avg",
                                 juce::dontSendNotification);
 
+            // Resume continuous noise pumping.
+            applyPlayConfigAndStartPump();
+
             if (benchmarkCompleteCallback)
                 benchmarkCompleteCallback(std::move(result));
         });
@@ -239,8 +290,8 @@ BenchmarkConfig ConfigTab::gatherConfig() const
     const int sampleRates[] = { 44100, 48000, 88200, 96000, 192000 };
     cfg.sampleRate = sampleRates[sampleRateBox.getSelectedId() - 1];
 
-    const int channelCounts[] = { 1, 2, 6, 8 };
-    cfg.numChannels = channelCounts[channelConfigBox.getSelectedId() - 1];
+    cfg.numInputChannels  = channelCountForId(inputChannelsBox.getSelectedId());
+    cfg.numOutputChannels = channelCountForId(outputChannelsBox.getSelectedId());
 
     cfg.numMidiNotes = static_cast<int>(numMidiNotesSlider.getValue());
 
@@ -248,11 +299,42 @@ BenchmarkConfig ConfigTab::gatherConfig() const
     {
         case 1:  cfg.inputType = InputType::Noise; break;
         case 2:  cfg.inputType = InputType::Midi;  break;
-        case 3:  cfg.inputType = InputType::Both;   break;
-        default: cfg.inputType = InputType::Noise;  break;
+        case 3:  cfg.inputType = InputType::Both;  break;
+        default: cfg.inputType = InputType::Noise; break;
     }
 
     return cfg;
+}
+
+void ConfigTab::applyPlayConfigAndStartPump()
+{
+    if (! pluginLoader.isPluginLoaded())
+        return;
+
+    // Always stop the pump first — prepareToPlay must not race with processBlock.
+    idlePump.stop();
+
+    if (pluginIsPrepared)
+        pluginLoader.releasePlugin();
+
+    auto cfg = gatherConfig();
+    pluginLoader.preparePlugin(cfg.sampleRate, cfg.blockSize,
+                               cfg.numInputChannels, cfg.numOutputChannels);
+    pluginIsPrepared = true;
+
+    idlePump.start(pluginLoader.getPluginInstance(),
+                   cfg.sampleRate, cfg.blockSize,
+                   cfg.numInputChannels, cfg.numOutputChannels);
+}
+
+void ConfigTab::stopPumpAndRelease()
+{
+    idlePump.stop();
+    if (pluginIsPrepared)
+    {
+        pluginLoader.releasePlugin();
+        pluginIsPrepared = false;
+    }
 }
 
 void ConfigTab::toggleEditorClicked()
@@ -288,10 +370,11 @@ void ConfigTab::saveParameters()
     {
         props->setValue("blockSize", static_cast<int>(blockSizeSlider.getValue()));
         props->setValue("numBlocks", static_cast<int>(numBlocksSlider.getValue()));
-        props->setValue("sampleRateId", sampleRateBox.getSelectedId());
-        props->setValue("channelConfigId", channelConfigBox.getSelectedId());
-        props->setValue("numMidiNotes", static_cast<int>(numMidiNotesSlider.getValue()));
-        props->setValue("inputTypeId", inputTypeBox.getSelectedId());
+        props->setValue("sampleRateId",      sampleRateBox.getSelectedId());
+        props->setValue("inputChannelsId",   inputChannelsBox.getSelectedId());
+        props->setValue("outputChannelsId",  outputChannelsBox.getSelectedId());
+        props->setValue("numMidiNotes",      static_cast<int>(numMidiNotesSlider.getValue()));
+        props->setValue("inputTypeId",       inputTypeBox.getSelectedId());
         props->saveIfNeeded();
     }
 }
@@ -303,7 +386,12 @@ void ConfigTab::restoreParameters()
         blockSizeSlider.setValue(props->getIntValue("blockSize", 512), juce::dontSendNotification);
         numBlocksSlider.setValue(props->getIntValue("numBlocks", 10000), juce::dontSendNotification);
         sampleRateBox.setSelectedId(props->getIntValue("sampleRateId", 1), juce::dontSendNotification);
-        channelConfigBox.setSelectedId(props->getIntValue("channelConfigId", 2), juce::dontSendNotification);
+
+        // Migrate legacy combined "channelConfigId" if present.
+        const int legacyChId = props->getIntValue("channelConfigId", 2);
+        inputChannelsBox.setSelectedId(props->getIntValue("inputChannelsId",  legacyChId), juce::dontSendNotification);
+        outputChannelsBox.setSelectedId(props->getIntValue("outputChannelsId", legacyChId), juce::dontSendNotification);
+
         numMidiNotesSlider.setValue(props->getIntValue("numMidiNotes", 0), juce::dontSendNotification);
         inputTypeBox.setSelectedId(props->getIntValue("inputTypeId", 1), juce::dontSendNotification);
 
@@ -355,13 +443,11 @@ void ConfigTab::updateMidiControls()
     numMidiNotesSlider.setEnabled(midi);
     numMidiNotesLabel.setEnabled(midi);
 
-    if (!midi)
+    if (! midi)
     {
-        // If input type was MIDI-only, switch to Noise
         if (inputTypeBox.getSelectedId() == 2)
             inputTypeBox.setSelectedId(1);
 
-        // Remove MIDI-only option, keep Both available but it will just send noise
         numMidiNotesSlider.setValue(0, juce::dontSendNotification);
     }
 }

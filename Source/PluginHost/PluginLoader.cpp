@@ -64,12 +64,14 @@ bool PluginLoader::acceptsMidi() const
     return false;
 }
 
-void PluginLoader::preparePlugin(double sampleRate, int blockSize, int numChannels)
+void PluginLoader::preparePlugin(double sampleRate, int blockSize,
+                                 int numInputChannels, int numOutputChannels)
 {
     if (pluginInstance == nullptr)
         return;
 
-    pluginInstance->setPlayConfigDetails(numChannels, numChannels, sampleRate, blockSize);
+    pluginInstance->setPlayConfigDetails(numInputChannels, numOutputChannels,
+                                         sampleRate, blockSize);
     pluginInstance->prepareToPlay(sampleRate, blockSize);
 }
 

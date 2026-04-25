@@ -18,6 +18,7 @@ target_sources(Aconcagua PRIVATE
     Source/MainWindow.cpp
     Source/PluginHost/PluginLoader.cpp
     Source/PluginHost/BenchmarkEngine.cpp
+    Source/PluginHost/IdlePump.cpp
     Source/Model/ResultsExporter.cpp
     Source/UI/AconcaguaLookAndFeel.cpp
     Source/UI/ConfigTab.cpp

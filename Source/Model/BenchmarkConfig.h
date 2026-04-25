@@ -13,7 +13,8 @@ struct BenchmarkConfig
     int blockSize = 512;
     int numBlocks = 10000;
     double sampleRate = 44100.0;
-    int numChannels = 2;
+    int numInputChannels = 2;
+    int numOutputChannels = 2;
     int numMidiNotes = 0;
     InputType inputType = InputType::Noise;
 };

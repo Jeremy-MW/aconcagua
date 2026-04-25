@@ -9,7 +9,8 @@ bool ResultsExporter::exportRun(const BenchmarkResult& result, const juce::File&
     csv << "Date/Time," << result.getCompletedAtDisplayString() << "\n";
     csv << "Block Size," << result.config.blockSize << "\n";
     csv << "Sample Rate," << static_cast<int>(result.config.sampleRate) << "\n";
-    csv << "Channels," << result.config.numChannels << "\n";
+    csv << "Input Channels," << result.config.numInputChannels << "\n";
+    csv << "Output Channels," << result.config.numOutputChannels << "\n";
     csv << "MIDI Notes," << result.config.numMidiNotes << "\n";
     csv << "Input Type," << inputTypeToString(result.config.inputType) << "\n";
     csv << "Total (ms)," << juce::String(result.totalMs, 4) << "\n";
@@ -44,7 +45,7 @@ bool ResultsExporter::exportRun(const BenchmarkResult& result, const juce::File&
 bool ResultsExporter::exportComparison(const std::vector<BenchmarkResult>& results, const juce::File& file)
 {
     juce::String csv;
-    csv << "Run,Date/Time,Plugin,Block Size,Sample Rate,Channels,MIDI Notes,Input Type,"
+    csv << "Run,Date/Time,Plugin,Block Size,Sample Rate,In Ch,Out Ch,MIDI Notes,Input Type,"
         << "Total (ms),Avg (us),Min (us),Max (us),StdDev (us),Spikes,Avg Budget %,Peak Budget %,Over Budget\n";
 
     for (size_t i = 0; i < results.size(); ++i)
@@ -55,7 +56,8 @@ bool ResultsExporter::exportComparison(const std::vector<BenchmarkResult>& resul
             << r.pluginName << ","
             << r.config.blockSize << ","
             << static_cast<int>(r.config.sampleRate) << ","
-            << r.config.numChannels << ","
+            << r.config.numInputChannels << ","
+            << r.config.numOutputChannels << ","
             << r.config.numMidiNotes << ","
             << inputTypeToString(r.config.inputType) << ","
             << juce::String(r.totalMs, 4) << ","

@@ -11,7 +11,7 @@ ResultsTab::ResultsTab()
     table.getHeader().addColumn("Plugin",      PluginCol,     120);
     table.getHeader().addColumn("Block",       BlockSizeCol,   55);
     table.getHeader().addColumn("Rate",        SampleRateCol,  60);
-    table.getHeader().addColumn("Ch",          ChannelsCol,    35);
+    table.getHeader().addColumn("In/Out",      ChannelsCol,    60);
     table.getHeader().addColumn("Notes",       NotesCol,       45);
     table.getHeader().addColumn("Total (ms)",  TotalCol,       75);
     table.getHeader().addColumn("Avg (us)",    AvgCol,         70);
@@ -30,7 +30,26 @@ ResultsTab::ResultsTab()
     retestButton.onClick = [this] { if (retestCallback) retestCallback(); };
     addAndMakeVisible(retestButton);
 
-    clearButton.onClick = [this] { clearResults(); };
+    clearButton.onClick = [this]
+    {
+        if (results.empty())
+            return;
+
+        juce::AlertWindow::showOkCancelBox(
+            juce::MessageBoxIconType::QuestionIcon,
+            "Clear all results?",
+            "This will discard all " + juce::String((int) results.size())
+                + " benchmark result" + (results.size() == 1 ? "" : "s")
+                + ". This cannot be undone.",
+            "Clear",
+            "Cancel",
+            this,
+            juce::ModalCallbackFunction::create([this](int result)
+            {
+                if (result == 1)
+                    clearResults();
+            }));
+    };
     addAndMakeVisible(clearButton);
 
     exportRunButton.onClick = [this] { exportRunClicked(); };
@@ -126,7 +145,8 @@ void ResultsTab::paintCell(juce::Graphics& g, int rowNumber, int columnId,
         case PluginCol:     text = r.pluginName; break;
         case BlockSizeCol:  text = juce::String(r.config.blockSize); break;
         case SampleRateCol: text = juce::String(static_cast<int>(r.config.sampleRate)); break;
-        case ChannelsCol:   text = juce::String(r.config.numChannels); break;
+        case ChannelsCol:   text = juce::String(r.config.numInputChannels) + "/"
+                                 + juce::String(r.config.numOutputChannels); break;
         case NotesCol:      text = juce::String(r.config.numMidiNotes); break;
         case TotalCol:      text = juce::String(r.totalMs, 1); break;
         case AvgCol:        text = juce::String(r.avgUs, 1); break;

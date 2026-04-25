@@ -2,6 +2,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "../PluginHost/PluginLoader.h"
 #include "../PluginHost/BenchmarkEngine.h"
+#include "../PluginHost/IdlePump.h"
 #include "../Model/BenchmarkConfig.h"
 #include "../Model/BenchmarkResult.h"
 #include <functional>
@@ -30,9 +31,17 @@ private:
     void restoreParameters();
     void updateMidiControls();
 
+    // Re-prepares the loaded plugin with current UI settings and (re)starts the
+    // idle pump. Safe to call when no plugin is loaded (does nothing).
+    void applyPlayConfigAndStartPump();
+    void stopPumpAndRelease();
+
     PluginLoader& pluginLoader;
     BenchmarkEngine& benchmarkEngine;
     juce::ApplicationProperties& appProperties;
+
+    IdlePump idlePump;
+    bool pluginIsPrepared = false;
 
     // Plugin loading
     juce::TextButton loadButton { "Load Plugin" };
@@ -49,8 +58,11 @@ private:
     juce::Label sampleRateLabel      { {}, "Sample Rate" };
     juce::ComboBox sampleRateBox;
 
-    juce::Label channelConfigLabel   { {}, "Channels" };
-    juce::ComboBox channelConfigBox;
+    juce::Label inputChannelsLabel   { {}, "Input Channels" };
+    juce::ComboBox inputChannelsBox;
+
+    juce::Label outputChannelsLabel  { {}, "Output Channels" };
+    juce::ComboBox outputChannelsBox;
 
     juce::Label numMidiNotesLabel    { {}, "MIDI Notes" };
     juce::Slider numMidiNotesSlider;
