@@ -49,6 +49,7 @@ private:
         AvgCol,
         MinCol,
         MaxCol,
+        BudgetCol,
         StdDevCol,
         SpikesCol,
         AvgBudgetCol,

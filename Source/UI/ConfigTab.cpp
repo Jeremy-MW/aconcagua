@@ -1,4 +1,5 @@
 #include "ConfigTab.h"
+#include <juce_audio_utils/juce_audio_utils.h>
 
 namespace
 {
@@ -23,6 +24,17 @@ namespace
         return kChannelOptions[idx].count;
     }
 
+    constexpr int kSampleRates[] = { 44100, 48000, 88200, 96000, 192000 };
+
+    int sampleRateIdForRate(int rate)
+    {
+        // Map an exact sample rate to its combo id (1-based). Returns 0 if no match.
+        for (int i = 0; i < (int) std::size(kSampleRates); ++i)
+            if (kSampleRates[i] == rate)
+                return i + 1;
+        return 0;
+    }
+
     // DocumentWindow whose close button triggers a caller-supplied callback,
     // instead of the default JUCEApplicationBase::quit() behaviour.
     class EditorHostWindow : public juce::DocumentWindow
@@ -37,6 +49,19 @@ namespace
 ConfigTab::ConfigTab(PluginLoader& loader, BenchmarkEngine& engine, juce::ApplicationProperties& properties)
     : pluginLoader(loader), benchmarkEngine(engine), appProperties(properties)
 {
+    // Initialise live audio device with saved state (if any) before any UI
+    // restoration, so the device's SR/BS can seed the combos.
+    juce::String savedAudio;
+    if (auto* props = appProperties.getUserSettings())
+        savedAudio = props->getValue("audioDeviceState", "");
+
+    liveAudio.onDeviceConfigChanged = [this](double sr, int bs)
+    {
+        seedConfigFromDevice(sr, bs);
+    };
+    liveAudio.initialise(savedAudio);
+    liveAudio.attach();
+
     // Load button
     addAndMakeVisible(loadButton);
     loadButton.onClick = [this] { loadPluginClicked(); };
@@ -51,7 +76,6 @@ ConfigTab::ConfigTab(PluginLoader& loader, BenchmarkEngine& engine, juce::Applic
     nameEditor.onTextChange = [this]
     {
         nameClearButton.setVisible(nameEditor.getText().isNotEmpty());
-        // Keep the clear button visually layered above the editor at the right edge.
         resized();
     };
     addAndMakeVisible(nameEditor);
@@ -69,13 +93,11 @@ ConfigTab::ConfigTab(PluginLoader& loader, BenchmarkEngine& engine, juce::Applic
     blockSizeSlider.setRange(2, 2000, 1);
     blockSizeSlider.setValue(512);
     blockSizeSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 60, 24);
-    blockSizeSlider.onDragEnd  = [this] { applyPlayConfigAndStartPump(); };
+    blockSizeSlider.onDragEnd     = [this] { applyPlayConfigAndResumeProcessing(); };
     blockSizeSlider.onValueChange = [this]
     {
-        // Apply only when the user has released the mouse for sliders to avoid
-        // re-preparing on every pixel.
         if (! blockSizeSlider.isMouseButtonDown())
-            applyPlayConfigAndStartPump();
+            applyPlayConfigAndResumeProcessing();
     };
     addAndMakeVisible(blockSizeSlider);
 
@@ -89,27 +111,24 @@ ConfigTab::ConfigTab(PluginLoader& loader, BenchmarkEngine& engine, juce::Applic
 
     // Sample rate
     addAndMakeVisible(sampleRateLabel);
-    sampleRateBox.addItem("44100", 1);
-    sampleRateBox.addItem("48000", 2);
-    sampleRateBox.addItem("88200", 3);
-    sampleRateBox.addItem("96000", 4);
-    sampleRateBox.addItem("192000", 5);
+    for (int i = 0; i < (int) std::size(kSampleRates); ++i)
+        sampleRateBox.addItem(juce::String(kSampleRates[i]), i + 1);
     sampleRateBox.setSelectedId(1);
-    sampleRateBox.onChange = [this] { applyPlayConfigAndStartPump(); };
+    sampleRateBox.onChange = [this] { applyPlayConfigAndResumeProcessing(); };
     addAndMakeVisible(sampleRateBox);
 
     // Input channels
     addAndMakeVisible(inputChannelsLabel);
     populateChannelCombo(inputChannelsBox);
     inputChannelsBox.setSelectedId(2);
-    inputChannelsBox.onChange = [this] { applyPlayConfigAndStartPump(); };
+    inputChannelsBox.onChange = [this] { applyPlayConfigAndResumeProcessing(); };
     addAndMakeVisible(inputChannelsBox);
 
     // Output channels
     addAndMakeVisible(outputChannelsLabel);
     populateChannelCombo(outputChannelsBox);
     outputChannelsBox.setSelectedId(2);
-    outputChannelsBox.onChange = [this] { applyPlayConfigAndStartPump(); };
+    outputChannelsBox.onChange = [this] { applyPlayConfigAndResumeProcessing(); };
     addAndMakeVisible(outputChannelsBox);
 
     // MIDI notes
@@ -131,6 +150,12 @@ ConfigTab::ConfigTab(PluginLoader& loader, BenchmarkEngine& engine, juce::Applic
     showEditorButton.setEnabled(false);
     showEditorButton.onClick = [this] { toggleEditorClicked(); };
     addAndMakeVisible(showEditorButton);
+
+    // Live audio controls
+    liveAudioToggle.onClick = [this] { onLiveAudioToggled(); };
+    addAndMakeVisible(liveAudioToggle);
+    audioConfigButton.onClick = [this] { audioConfigClicked(); };
+    addAndMakeVisible(audioConfigButton);
 
     // About button
     aboutButton.onClick = [this] { aboutClicked(); };
@@ -154,7 +179,7 @@ ConfigTab::ConfigTab(PluginLoader& loader, BenchmarkEngine& engine, juce::Applic
 ConfigTab::~ConfigTab()
 {
     saveParameters();
-    stopPumpAndRelease();
+    stopProcessingAndRelease();
 }
 
 void ConfigTab::resized()
@@ -173,7 +198,6 @@ void ConfigTab::resized()
     pluginNameLabel.setBounds(row);
     area.removeFromTop(spacing * 2);
 
-    // Helper lambda for parameter rows
     auto layoutRow = [&](juce::Label& label, juce::Component& control)
     {
         auto r = area.removeFromTop(rowHeight);
@@ -184,14 +208,10 @@ void ConfigTab::resized()
 
     layoutRow(nameLabel,           nameEditor);
     {
-        // Vertically center the editor's text by adjusting its top indent based
-        // on actual height vs. font height (JUCE TextEditor's setJustification
-        // is unreliable for single-line vertical centering).
         const int fontH = (int) std::ceil(nameEditor.getFont().getHeight());
         const int topIndent = juce::jmax(0, (nameEditor.getHeight() - fontH) / 2);
         nameEditor.setIndents(4, topIndent);
 
-        // Overlay the clear-X button over the right edge of the name editor.
         auto editorBounds = nameEditor.getBounds();
         const int sz = juce::jmax(18, editorBounds.getHeight() - 6);
         nameClearButton.setBounds(editorBounds.getRight() - sz - 3,
@@ -206,6 +226,13 @@ void ConfigTab::resized()
     layoutRow(numMidiNotesLabel,   numMidiNotesSlider);
     layoutRow(inputTypeLabel,      inputTypeBox);
 
+    area.removeFromTop(spacing);
+
+    // Live audio row
+    auto liveRow = area.removeFromTop(rowHeight);
+    liveAudioToggle.setBounds(liveRow.removeFromLeft(140));
+    liveRow.removeFromLeft(10);
+    audioConfigButton.setBounds(liveRow.removeFromLeft(120));
     area.removeFromTop(spacing);
 
     // Go button + About
@@ -225,7 +252,7 @@ void ConfigTab::paint(juce::Graphics& g)
 void ConfigTab::loadPluginFromFile(const juce::File& file)
 {
     editorWindow.reset();
-    stopPumpAndRelease();
+    stopProcessingAndRelease();
 
     pluginLoader.loadPlugin(file, [this, file](const juce::String& error)
     {
@@ -237,7 +264,6 @@ void ConfigTab::loadPluginFromFile(const juce::File& file)
             showEditorButton.setEnabled(true);
             updateMidiControls();
 
-            // Persist plugin path and browse directory
             if (auto* props = appProperties.getUserSettings())
             {
                 props->setValue("lastPluginPath", file.getFullPathName());
@@ -245,9 +271,7 @@ void ConfigTab::loadPluginFromFile(const juce::File& file)
                 props->saveIfNeeded();
             }
 
-            // Apply current config and start the idle pump immediately so the
-            // plugin reaches a warmed-up steady state before the user benchmarks.
-            applyPlayConfigAndStartPump();
+            applyPlayConfigAndResumeProcessing();
         }
         else
         {
@@ -300,11 +324,19 @@ void ConfigTab::goClicked()
     loadButton.setEnabled(false);
     statusLabel.setText("Running benchmark...", juce::dontSendNotification);
 
-    // Hand the plugin off from the idle pump to the benchmark engine. The
-    // plugin remains prepared across this transition.
+    // Suspend live audio / pump and re-prepare the plugin for benchmark settings.
+    liveAudio.setPlugin(nullptr, 0, 0);
     idlePump.stop();
+    if (pluginIsPrepared)
+    {
+        pluginLoader.releasePlugin();
+        pluginIsPrepared = false;
+    }
 
     auto config = gatherConfig();
+    pluginLoader.preparePlugin(config.sampleRate, config.blockSize,
+                               config.numInputChannels, config.numOutputChannels);
+    pluginIsPrepared = true;
 
     benchmarkEngine.startBenchmark(
         pluginLoader.getPluginInstance(),
@@ -318,8 +350,13 @@ void ConfigTab::goClicked()
                                 + juce::String(result.avgUs, 1) + " us avg",
                                 juce::dontSendNotification);
 
-            // Resume continuous noise pumping.
-            applyPlayConfigAndStartPump();
+            // Re-release: live or pump path will re-prepare with its own SR/BS.
+            if (pluginIsPrepared)
+            {
+                pluginLoader.releasePlugin();
+                pluginIsPrepared = false;
+            }
+            applyPlayConfigAndResumeProcessing();
 
             if (benchmarkCompleteCallback)
                 benchmarkCompleteCallback(std::move(result));
@@ -333,8 +370,7 @@ BenchmarkConfig ConfigTab::gatherConfig() const
     cfg.blockSize = static_cast<int>(blockSizeSlider.getValue());
     cfg.numBlocks = static_cast<int>(numBlocksSlider.getValue());
 
-    const int sampleRates[] = { 44100, 48000, 88200, 96000, 192000 };
-    cfg.sampleRate = sampleRates[sampleRateBox.getSelectedId() - 1];
+    cfg.sampleRate = kSampleRates[sampleRateBox.getSelectedId() - 1];
 
     cfg.numInputChannels  = channelCountForId(inputChannelsBox.getSelectedId());
     cfg.numOutputChannels = channelCountForId(outputChannelsBox.getSelectedId());
@@ -352,35 +388,110 @@ BenchmarkConfig ConfigTab::gatherConfig() const
     return cfg;
 }
 
-void ConfigTab::applyPlayConfigAndStartPump()
+void ConfigTab::applyPlayConfigAndResumeProcessing()
 {
     if (! pluginLoader.isPluginLoaded())
         return;
 
-    // Always stop the pump first — prepareToPlay must not race with processBlock.
+    // Stop everything that might be calling processBlock.
+    liveAudio.setPlugin(nullptr, 0, 0);
     idlePump.stop();
 
-    if (pluginIsPrepared)
-        pluginLoader.releasePlugin();
-
-    auto cfg = gatherConfig();
-    pluginLoader.preparePlugin(cfg.sampleRate, cfg.blockSize,
-                               cfg.numInputChannels, cfg.numOutputChannels);
-    pluginIsPrepared = true;
-
-    idlePump.start(pluginLoader.getPluginInstance(),
-                   cfg.sampleRate, cfg.blockSize,
-                   cfg.numInputChannels, cfg.numOutputChannels);
-}
-
-void ConfigTab::stopPumpAndRelease()
-{
-    idlePump.stop();
     if (pluginIsPrepared)
     {
         pluginLoader.releasePlugin();
         pluginIsPrepared = false;
     }
+
+    const int pIn  = channelCountForId(inputChannelsBox.getSelectedId());
+    const int pOut = channelCountForId(outputChannelsBox.getSelectedId());
+
+    const bool wantLive = liveAudioToggle.getToggleState() && liveAudio.isDeviceOpen();
+
+    if (wantLive)
+    {
+        const double sr = liveAudio.getDeviceSampleRate();
+        const int    bs = liveAudio.getDeviceBlockSize();
+
+        pluginLoader.preparePlugin(sr, bs, pIn, pOut);
+        pluginIsPrepared = true;
+
+        liveAudio.setPlugin(pluginLoader.getPluginInstance(), pIn, pOut);
+    }
+    else
+    {
+        auto cfg = gatherConfig();
+        pluginLoader.preparePlugin(cfg.sampleRate, cfg.blockSize, pIn, pOut);
+        pluginIsPrepared = true;
+
+        idlePump.start(pluginLoader.getPluginInstance(),
+                       cfg.sampleRate, cfg.blockSize, pIn, pOut);
+    }
+}
+
+void ConfigTab::stopProcessingAndRelease()
+{
+    liveAudio.setPlugin(nullptr, 0, 0);
+    idlePump.stop();
+
+    if (pluginIsPrepared)
+    {
+        pluginLoader.releasePlugin();
+        pluginIsPrepared = false;
+    }
+}
+
+void ConfigTab::onLiveAudioToggled()
+{
+    if (auto* props = appProperties.getUserSettings())
+    {
+        props->setValue("liveAudioActive", liveAudioToggle.getToggleState());
+        props->saveIfNeeded();
+    }
+
+    if (liveAudioToggle.getToggleState() && ! liveAudio.isDeviceOpen())
+    {
+        statusLabel.setText("No audio device open — using idle pump.",
+                            juce::dontSendNotification);
+    }
+
+    applyPlayConfigAndResumeProcessing();
+}
+
+void ConfigTab::audioConfigClicked()
+{
+    auto* selector = new juce::AudioDeviceSelectorComponent(
+        liveAudio.getDeviceManager(),
+        /*minIn*/  0, /*maxIn*/  256,
+        /*minOut*/ 0, /*maxOut*/ 256,
+        /*showMidiInput*/   true,
+        /*showMidiOutput*/  false,
+        /*stereoPairs*/     true,
+        /*hideAdvanced*/    false);
+    selector->setSize(550, 500);
+
+    juce::DialogWindow::LaunchOptions opts;
+    opts.content.setOwned(selector);
+    opts.dialogTitle = "Audio Configuration";
+    opts.dialogBackgroundColour = juce::Colour(0xff1e1e2e);
+    opts.escapeKeyTriggersCloseButton = true;
+    opts.useNativeTitleBar = true;
+    opts.resizable = true;
+    opts.launchAsync();
+}
+
+void ConfigTab::seedConfigFromDevice(double sampleRate, int blockSize)
+{
+    // Match Sample Rate combo if device's rate is one of our standard values.
+    const int srId = sampleRateIdForRate((int) sampleRate);
+    if (srId > 0)
+        sampleRateBox.setSelectedId(srId, juce::dontSendNotification);
+
+    if (blockSize >= blockSizeSlider.getMinimum() && blockSize <= blockSizeSlider.getMaximum())
+        blockSizeSlider.setValue(blockSize, juce::dontSendNotification);
+
+    // Re-prepare for the new device settings if live mode is on.
+    applyPlayConfigAndResumeProcessing();
 }
 
 void ConfigTab::toggleEditorClicked()
@@ -405,8 +516,6 @@ void ConfigTab::toggleEditorClicked()
 
     host->onCloseButton = [this]
     {
-        // Defer destruction so we don't delete the window from inside its own
-        // close-button handler.
         juce::MessageManager::callAsync([this] { editorWindow.reset(); });
     };
 
@@ -431,6 +540,8 @@ void ConfigTab::saveParameters()
         props->setValue("outputChannelsId",  outputChannelsBox.getSelectedId());
         props->setValue("numMidiNotes",      static_cast<int>(numMidiNotesSlider.getValue()));
         props->setValue("inputTypeId",       inputTypeBox.getSelectedId());
+        props->setValue("liveAudioActive",   liveAudioToggle.getToggleState());
+        props->setValue("audioDeviceState",  liveAudio.getStateAsXmlString());
         props->saveIfNeeded();
     }
 }
@@ -444,13 +555,15 @@ void ConfigTab::restoreParameters()
         numBlocksSlider.setValue(props->getIntValue("numBlocks", 10000), juce::dontSendNotification);
         sampleRateBox.setSelectedId(props->getIntValue("sampleRateId", 1), juce::dontSendNotification);
 
-        // Migrate legacy combined "channelConfigId" if present.
         const int legacyChId = props->getIntValue("channelConfigId", 2);
         inputChannelsBox.setSelectedId(props->getIntValue("inputChannelsId",  legacyChId), juce::dontSendNotification);
         outputChannelsBox.setSelectedId(props->getIntValue("outputChannelsId", legacyChId), juce::dontSendNotification);
 
         numMidiNotesSlider.setValue(props->getIntValue("numMidiNotes", 0), juce::dontSendNotification);
         inputTypeBox.setSelectedId(props->getIntValue("inputTypeId", 1), juce::dontSendNotification);
+
+        liveAudioToggle.setToggleState(props->getBoolValue("liveAudioActive", false),
+                                       juce::dontSendNotification);
 
         auto lastPlugin = props->getValue("lastPluginPath", "");
         if (lastPlugin.isNotEmpty())

@@ -18,6 +18,7 @@ ResultsTab::ResultsTab()
     table.getHeader().addColumn("Avg (us)",    AvgCol,         70);
     table.getHeader().addColumn("Min (us)",    MinCol,         65);
     table.getHeader().addColumn("Max (us)",    MaxCol,         65);
+    table.getHeader().addColumn("Budget (us)", BudgetCol,      80);
     table.getHeader().addColumn("StdDev",      StdDevCol,      65);
     table.getHeader().addColumn("Spikes",      SpikesCol,      50);
     table.getHeader().addColumn("Avg %",       AvgBudgetCol,   55);
@@ -154,6 +155,7 @@ void ResultsTab::paintCell(juce::Graphics& g, int rowNumber, int columnId,
         case AvgCol:        text = juce::String(r.avgUs, 1); break;
         case MinCol:        text = juce::String(r.minUs, 1); break;
         case MaxCol:        text = juce::String(r.maxUs, 1); break;
+        case BudgetCol:     text = juce::String(r.budgetUs, 1); break;
         case StdDevCol:     text = juce::String(r.stdDevUs, 1); break;
         case SpikesCol:     text = juce::String(r.spikeCount); break;
         case AvgBudgetCol:  text = juce::String(r.avgBudgetPercent, 1) + "%"; break;

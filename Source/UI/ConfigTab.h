@@ -3,6 +3,7 @@
 #include "../PluginHost/PluginLoader.h"
 #include "../PluginHost/BenchmarkEngine.h"
 #include "../PluginHost/IdlePump.h"
+#include "../Audio/LiveAudioEngine.h"
 #include "../Model/BenchmarkConfig.h"
 #include "../Model/BenchmarkResult.h"
 #include <functional>
@@ -31,16 +32,22 @@ private:
     void restoreParameters();
     void updateMidiControls();
 
-    // Re-prepares the loaded plugin with current UI settings and (re)starts the
-    // idle pump. Safe to call when no plugin is loaded (does nothing).
-    void applyPlayConfigAndStartPump();
-    void stopPumpAndRelease();
+    // Re-prepares the loaded plugin with current UI settings and (re)starts
+    // either the live audio engine (if the master toggle is on) or the idle
+    // pump fallback. Safe to call when no plugin is loaded (does nothing).
+    void applyPlayConfigAndResumeProcessing();
+    void stopProcessingAndRelease();
+
+    void onLiveAudioToggled();
+    void audioConfigClicked();
+    void seedConfigFromDevice(double sampleRate, int blockSize);
 
     PluginLoader& pluginLoader;
     BenchmarkEngine& benchmarkEngine;
     juce::ApplicationProperties& appProperties;
 
     IdlePump idlePump;
+    LiveAudioEngine liveAudio;
     bool pluginIsPrepared = false;
 
     // Plugin loading
@@ -78,6 +85,10 @@ private:
     juce::TextButton showEditorButton { "Show Plugin GUI" };
     std::unique_ptr<juce::DocumentWindow> editorWindow;
     void toggleEditorClicked();
+
+    // Live audio
+    juce::ToggleButton liveAudioToggle { "Audio Active" };
+    juce::TextButton audioConfigButton { "Audio Config" };
 
     // About
     juce::TextButton aboutButton { "About" };
