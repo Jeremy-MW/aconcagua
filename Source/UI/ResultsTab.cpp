@@ -7,6 +7,7 @@ ResultsTab::ResultsTab()
     addAndMakeVisible(latestStatsLabel);
 
     table.getHeader().addColumn("Run",        RunCol,         40);
+    table.getHeader().addColumn("Date/Time",   DateTimeCol,  140);
     table.getHeader().addColumn("Plugin",      PluginCol,     120);
     table.getHeader().addColumn("Block",       BlockSizeCol,   55);
     table.getHeader().addColumn("Rate",        SampleRateCol,  60);
@@ -23,10 +24,14 @@ ResultsTab::ResultsTab()
     table.getHeader().addColumn("Over",        OverBudgetCol,  45);
 
     table.setColour(juce::ListBox::backgroundColourId, juce::Colour(0xff1e1e2e));
+    table.addMouseListener(this, true);
     addAndMakeVisible(table);
 
     retestButton.onClick = [this] { if (retestCallback) retestCallback(); };
     addAndMakeVisible(retestButton);
+
+    clearButton.onClick = [this] { clearResults(); };
+    addAndMakeVisible(clearButton);
 
     exportRunButton.onClick = [this] { exportRunClicked(); };
     addAndMakeVisible(exportRunButton);
@@ -44,6 +49,8 @@ void ResultsTab::resized()
     auto buttonRow = area.removeFromBottom(35);
     buttonRow.removeFromTop(5);
     retestButton.setBounds(buttonRow.removeFromLeft(80));
+    buttonRow.removeFromLeft(10);
+    clearButton.setBounds(buttonRow.removeFromLeft(80));
     buttonRow.removeFromLeft(10);
     exportRunButton.setBounds(buttonRow.removeFromLeft(100));
     buttonRow.removeFromLeft(10);
@@ -63,6 +70,17 @@ void ResultsTab::addResult(BenchmarkResult result)
     table.updateContent();
     table.selectRow(static_cast<int>(results.size()) - 1);
     updateLatestStats();
+}
+
+void ResultsTab::clearResults()
+{
+    results.clear();
+    table.deselectAllRows();
+    table.updateContent();
+    latestStatsLabel.setText("No results yet.", juce::dontSendNotification);
+
+    if (selectionCallback)
+        selectionCallback(nullptr);
 }
 
 const BenchmarkResult* ResultsTab::getSelectedResult() const
@@ -104,6 +122,7 @@ void ResultsTab::paintCell(juce::Graphics& g, int rowNumber, int columnId,
     switch (columnId)
     {
         case RunCol:        text = juce::String(rowNumber + 1); break;
+        case DateTimeCol:   text = r.getCompletedAtDisplayString(); break;
         case PluginCol:     text = r.pluginName; break;
         case BlockSizeCol:  text = juce::String(r.config.blockSize); break;
         case SampleRateCol: text = juce::String(static_cast<int>(r.config.sampleRate)); break;
@@ -132,6 +151,24 @@ void ResultsTab::paintCell(juce::Graphics& g, int rowNumber, int columnId,
     g.drawText(text, 4, 0, width - 8, height, juce::Justification::centredLeft);
 }
 
+void ResultsTab::mouseDown(const juce::MouseEvent& event)
+{
+    if (! (event.mods.isPopupMenu() || event.mods.isRightButtonDown()))
+        return;
+
+    if (! table.isParentOf(event.eventComponent) && event.eventComponent != &table)
+        return;
+
+    const auto localEvent = event.getEventRelativeTo(&table);
+    const auto rowNumber = table.getRowContainingPosition(localEvent.x, localEvent.y);
+
+    if (rowNumber < 0 || rowNumber >= getNumRows())
+        return;
+
+    table.selectRow(rowNumber);
+    showDeleteMenuForRow(rowNumber, event.eventComponent);
+}
+
 void ResultsTab::selectedRowsChanged(int /*lastRowSelected*/)
 {
     if (selectionCallback)
@@ -141,7 +178,10 @@ void ResultsTab::selectedRowsChanged(int /*lastRowSelected*/)
 void ResultsTab::updateLatestStats()
 {
     if (results.empty())
+    {
+        latestStatsLabel.setText("No results yet.", juce::dontSendNotification);
         return;
+    }
 
     const auto& r = results.back();
     juce::String stats;
@@ -159,6 +199,48 @@ void ResultsTab::updateLatestStats()
           << "  (budget: " << juce::String(r.budgetUs, 1) << " us per block)";
 
     latestStatsLabel.setText(stats, juce::dontSendNotification);
+}
+
+void ResultsTab::deleteResultAtRow(int rowNumber)
+{
+    if (rowNumber < 0 || rowNumber >= static_cast<int>(results.size()))
+        return;
+
+    results.erase(results.begin() + rowNumber);
+    table.updateContent();
+
+    if (results.empty())
+    {
+        table.deselectAllRows();
+        latestStatsLabel.setText("No results yet.", juce::dontSendNotification);
+
+        if (selectionCallback)
+            selectionCallback(nullptr);
+
+        return;
+    }
+
+    const auto rowToSelect = juce::jlimit(0, static_cast<int>(results.size()) - 1, rowNumber);
+    table.selectRow(rowToSelect);
+    updateLatestStats();
+}
+
+void ResultsTab::showDeleteMenuForRow(int rowNumber, juce::Component* targetComponent)
+{
+    juce::PopupMenu menu;
+    menu.addItem(1, "Delete test entry");
+
+    auto options = juce::PopupMenu::Options()
+                       .withTargetComponent(targetComponent != nullptr ? targetComponent : &table)
+                       .withParentComponent(this)
+                       .withMinimumWidth(160);
+
+    menu.showMenuAsync(options,
+                       [this, rowNumber](int result)
+                       {
+                           if (result == 1)
+                               deleteResultAtRow(rowNumber);
+                       });
 }
 
 void ResultsTab::exportRunClicked()

@@ -9,6 +9,7 @@
 struct BenchmarkResult
 {
     juce::String pluginName;
+    juce::int64 completedAtMsSinceEpoch = 0;
     BenchmarkConfig config;
     std::vector<double> blockTimingsMicroseconds;
 
@@ -30,6 +31,7 @@ struct BenchmarkResult
     {
         auto* xml = new juce::XmlElement("Result");
         xml->setAttribute("pluginName", pluginName);
+        xml->setAttribute("completedAtMsSinceEpoch", juce::String(completedAtMsSinceEpoch));
         xml->setAttribute("blockSize", config.blockSize);
         xml->setAttribute("numBlocks", config.numBlocks);
         xml->setAttribute("sampleRate", config.sampleRate);
@@ -53,6 +55,7 @@ struct BenchmarkResult
     {
         BenchmarkResult r;
         r.pluginName = xml.getStringAttribute("pluginName");
+        r.completedAtMsSinceEpoch = xml.getStringAttribute("completedAtMsSinceEpoch").getLargeIntValue();
         r.config.blockSize = xml.getIntAttribute("blockSize", 512);
         r.config.numBlocks = xml.getIntAttribute("numBlocks", 10000);
         r.config.sampleRate = xml.getDoubleAttribute("sampleRate", 44100.0);
@@ -70,6 +73,14 @@ struct BenchmarkResult
 
         r.computeStats();
         return r;
+    }
+
+    juce::String getCompletedAtDisplayString() const
+    {
+        if (completedAtMsSinceEpoch <= 0)
+            return {};
+
+        return juce::Time(completedAtMsSinceEpoch).formatted("%Y-%m-%d %H:%M:%S");
     }
 
     void computeStats()

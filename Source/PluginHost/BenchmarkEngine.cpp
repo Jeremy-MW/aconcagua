@@ -59,6 +59,7 @@ void BenchmarkEngine::run()
     // Pre-allocate results
     BenchmarkResult result;
     result.pluginName = pluginName;
+    result.completedAtMsSinceEpoch = juce::Time::currentTimeMillis();
     result.config = config;
     result.blockTimingsMicroseconds.reserve(static_cast<size_t>(config.numBlocks));
 

@@ -14,6 +14,7 @@ public:
     void paint(juce::Graphics& g) override;
 
     void addResult(BenchmarkResult result);
+    void clearResults();
     const BenchmarkResult* getSelectedResult() const;
 
     using SelectionCallback = std::function<void(const BenchmarkResult*)>;
@@ -32,9 +33,12 @@ public:
     void selectedRowsChanged(int lastRowSelected) override;
 
 private:
+    void mouseDown(const juce::MouseEvent& event) override;
+
     enum ColumnIds
     {
         RunCol = 1,
+        DateTimeCol,
         PluginCol,
         BlockSizeCol,
         SampleRateCol,
@@ -62,12 +66,15 @@ private:
     SelectionCallback selectionCallback;
 
     juce::TextButton retestButton { "Re-test" };
+    juce::TextButton clearButton { "Clear" };
     juce::TextButton exportRunButton { "Export Run" };
     juce::TextButton exportAllButton { "Export All" };
     std::unique_ptr<juce::FileChooser> fileChooser;
     RetestCallback retestCallback;
 
     void updateLatestStats();
+    void deleteResultAtRow(int rowNumber);
+    void showDeleteMenuForRow(int rowNumber, juce::Component* targetComponent);
     void exportRunClicked();
     void exportAllClicked();
 
