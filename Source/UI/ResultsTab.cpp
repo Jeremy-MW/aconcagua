@@ -6,8 +6,9 @@ ResultsTab::ResultsTab()
     latestStatsLabel.setText("No results yet.", juce::dontSendNotification);
     addAndMakeVisible(latestStatsLabel);
 
-    table.getHeader().addColumn("Run",        RunCol,         40);
-    table.getHeader().addColumn("Date/Time",   DateTimeCol,  140);
+    table.getHeader().addColumn("Run",         RunCol,         40);
+    table.getHeader().addColumn("Name",        NameCol,       140);
+    table.getHeader().addColumn("Date/Time",   DateTimeCol,   140);
     table.getHeader().addColumn("Plugin",      PluginCol,     120);
     table.getHeader().addColumn("Block",       BlockSizeCol,   55);
     table.getHeader().addColumn("Rate",        SampleRateCol,  60);
@@ -141,6 +142,7 @@ void ResultsTab::paintCell(juce::Graphics& g, int rowNumber, int columnId,
     switch (columnId)
     {
         case RunCol:        text = juce::String(rowNumber + 1); break;
+        case NameCol:       text = r.config.name; break;
         case DateTimeCol:   text = r.getCompletedAtDisplayString(); break;
         case PluginCol:     text = r.pluginName; break;
         case BlockSizeCol:  text = juce::String(r.config.blockSize); break;

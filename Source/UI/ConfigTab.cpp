@@ -22,6 +22,16 @@ namespace
         const int idx = juce::jlimit(1, (int) std::size(kChannelOptions), id) - 1;
         return kChannelOptions[idx].count;
     }
+
+    // DocumentWindow whose close button triggers a caller-supplied callback,
+    // instead of the default JUCEApplicationBase::quit() behaviour.
+    class EditorHostWindow : public juce::DocumentWindow
+    {
+    public:
+        using juce::DocumentWindow::DocumentWindow;
+        std::function<void()> onCloseButton;
+        void closeButtonPressed() override { if (onCloseButton) onCloseButton(); }
+    };
 }
 
 ConfigTab::ConfigTab(PluginLoader& loader, BenchmarkEngine& engine, juce::ApplicationProperties& properties)
@@ -34,6 +44,25 @@ ConfigTab::ConfigTab(PluginLoader& loader, BenchmarkEngine& engine, juce::Applic
     pluginNameLabel.setText("No plugin loaded", juce::dontSendNotification);
     pluginNameLabel.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(pluginNameLabel);
+
+    // Name (free-form label for this run)
+    addAndMakeVisible(nameLabel);
+    nameEditor.setTextToShowWhenEmpty("(optional)", juce::Colour(0xff6c7086));
+    nameEditor.onTextChange = [this]
+    {
+        nameClearButton.setVisible(nameEditor.getText().isNotEmpty());
+        // Keep the clear button visually layered above the editor at the right edge.
+        resized();
+    };
+    addAndMakeVisible(nameEditor);
+
+    nameClearButton.setVisible(false);
+    nameClearButton.onClick = [this]
+    {
+        nameEditor.setText({}, juce::sendNotification);
+        nameEditor.grabKeyboardFocus();
+    };
+    addChildComponent(nameClearButton);
 
     // Block size
     addAndMakeVisible(blockSizeLabel);
@@ -153,6 +182,22 @@ void ConfigTab::resized()
         area.removeFromTop(spacing);
     };
 
+    layoutRow(nameLabel,           nameEditor);
+    {
+        // Vertically center the editor's text by adjusting its top indent based
+        // on actual height vs. font height (JUCE TextEditor's setJustification
+        // is unreliable for single-line vertical centering).
+        const int fontH = (int) std::ceil(nameEditor.getFont().getHeight());
+        const int topIndent = juce::jmax(0, (nameEditor.getHeight() - fontH) / 2);
+        nameEditor.setIndents(4, topIndent);
+
+        // Overlay the clear-X button over the right edge of the name editor.
+        auto editorBounds = nameEditor.getBounds();
+        const int sz = juce::jmax(18, editorBounds.getHeight() - 6);
+        nameClearButton.setBounds(editorBounds.getRight() - sz - 3,
+                                  editorBounds.getY() + (editorBounds.getHeight() - sz) / 2,
+                                  sz, sz);
+    }
     layoutRow(blockSizeLabel,      blockSizeSlider);
     layoutRow(numBlocksLabel,      numBlocksSlider);
     layoutRow(sampleRateLabel,     sampleRateBox);
@@ -284,6 +329,7 @@ void ConfigTab::goClicked()
 BenchmarkConfig ConfigTab::gatherConfig() const
 {
     BenchmarkConfig cfg;
+    cfg.name = nameEditor.getText().trim();
     cfg.blockSize = static_cast<int>(blockSizeSlider.getValue());
     cfg.numBlocks = static_cast<int>(numBlocksSlider.getValue());
 
@@ -352,22 +398,32 @@ void ConfigTab::toggleEditorClicked()
         return;
     }
 
-    editorWindow = std::make_unique<juce::DocumentWindow>(
+    auto host = std::make_unique<EditorHostWindow>(
         pluginLoader.getPluginName() + " - Editor",
         juce::Colour(0xff1e1e2e),
         juce::DocumentWindow::closeButton);
 
-    editorWindow->setUsingNativeTitleBar(true);
-    editorWindow->setContentOwned(editor, true);
-    editorWindow->setResizable(false, false);
-    editorWindow->centreWithSize(editor->getWidth(), editor->getHeight());
-    editorWindow->setVisible(true);
+    host->onCloseButton = [this]
+    {
+        // Defer destruction so we don't delete the window from inside its own
+        // close-button handler.
+        juce::MessageManager::callAsync([this] { editorWindow.reset(); });
+    };
+
+    host->setUsingNativeTitleBar(true);
+    host->setContentOwned(editor, true);
+    host->setResizable(false, false);
+    host->centreWithSize(editor->getWidth(), editor->getHeight());
+    host->setVisible(true);
+
+    editorWindow = std::move(host);
 }
 
 void ConfigTab::saveParameters()
 {
     if (auto* props = appProperties.getUserSettings())
     {
+        props->setValue("configName", nameEditor.getText());
         props->setValue("blockSize", static_cast<int>(blockSizeSlider.getValue()));
         props->setValue("numBlocks", static_cast<int>(numBlocksSlider.getValue()));
         props->setValue("sampleRateId",      sampleRateBox.getSelectedId());
@@ -383,6 +439,7 @@ void ConfigTab::restoreParameters()
 {
     if (auto* props = appProperties.getUserSettings())
     {
+        nameEditor.setText(props->getValue("configName", ""), juce::sendNotification);
         blockSizeSlider.setValue(props->getIntValue("blockSize", 512), juce::dontSendNotification);
         numBlocksSlider.setValue(props->getIntValue("numBlocks", 10000), juce::dontSendNotification);
         sampleRateBox.setSelectedId(props->getIntValue("sampleRateId", 1), juce::dontSendNotification);

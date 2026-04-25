@@ -38,6 +38,7 @@ private:
     enum ColumnIds
     {
         RunCol = 1,
+        NameCol,
         DateTimeCol,
         PluginCol,
         BlockSizeCol,

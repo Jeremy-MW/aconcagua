@@ -32,6 +32,7 @@ struct BenchmarkResult
         auto* xml = new juce::XmlElement("Result");
         xml->setAttribute("pluginName", pluginName);
         xml->setAttribute("completedAtMsSinceEpoch", juce::String(completedAtMsSinceEpoch));
+        xml->setAttribute("name", config.name);
         xml->setAttribute("blockSize", config.blockSize);
         xml->setAttribute("numBlocks", config.numBlocks);
         xml->setAttribute("sampleRate", config.sampleRate);
@@ -57,6 +58,7 @@ struct BenchmarkResult
         BenchmarkResult r;
         r.pluginName = xml.getStringAttribute("pluginName");
         r.completedAtMsSinceEpoch = xml.getStringAttribute("completedAtMsSinceEpoch").getLargeIntValue();
+        r.config.name = xml.getStringAttribute("name");
         r.config.blockSize = xml.getIntAttribute("blockSize", 512);
         r.config.numBlocks = xml.getIntAttribute("numBlocks", 10000);
         r.config.sampleRate = xml.getDoubleAttribute("sampleRate", 44100.0);

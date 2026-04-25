@@ -49,6 +49,10 @@ private:
     std::unique_ptr<juce::FileChooser> fileChooser;
 
     // Parameters
+    juce::Label nameLabel            { {}, "Name" };
+    juce::TextEditor nameEditor;
+    juce::TextButton nameClearButton { juce::String::charToString(0x00D7) };
+
     juce::Label blockSizeLabel       { {}, "Block Size" };
     juce::Slider blockSizeSlider;
 

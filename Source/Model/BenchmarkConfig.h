@@ -10,6 +10,7 @@ enum class InputType
 
 struct BenchmarkConfig
 {
+    juce::String name;
     int blockSize = 512;
     int numBlocks = 10000;
     double sampleRate = 44100.0;
