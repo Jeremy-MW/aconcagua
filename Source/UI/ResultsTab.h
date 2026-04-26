@@ -31,6 +31,7 @@ public:
     void paintRowBackground(juce::Graphics& g, int rowNumber, int width, int height, bool rowIsSelected) override;
     void paintCell(juce::Graphics& g, int rowNumber, int columnId, int width, int height, bool rowIsSelected) override;
     void selectedRowsChanged(int lastRowSelected) override;
+    void cellDoubleClicked(int rowNumber, int columnId, const juce::MouseEvent& event) override;
 
 private:
     void mouseDown(const juce::MouseEvent& event) override;
@@ -78,6 +79,7 @@ private:
 
     void updateLatestStats();
     void deleteResultAtRow(int rowNumber);
+    void editNameAtRow(int rowNumber);
     void showDeleteMenuForRow(int rowNumber, juce::Component* targetComponent);
     void importClicked();
     void exportRunClicked();

@@ -457,6 +457,47 @@ void ResultsTab::mouseDown(const juce::MouseEvent& event)
     showDeleteMenuForRow(rowNumber, event.eventComponent);
 }
 
+void ResultsTab::cellDoubleClicked(int rowNumber, int columnId, const juce::MouseEvent&)
+{
+    if (columnId == NameCol)
+        editNameAtRow(rowNumber);
+}
+
+void ResultsTab::editNameAtRow(int rowNumber)
+{
+    if (rowNumber < 0 || rowNumber >= static_cast<int>(results.size()))
+        return;
+
+    auto* aw = new juce::AlertWindow("Rename run", "Enter a new name:",
+                                     juce::MessageBoxIconType::NoIcon, this);
+    aw->addTextEditor("name", results[static_cast<size_t>(rowNumber)].config.name);
+    aw->addButton("OK",     1, juce::KeyPress(juce::KeyPress::returnKey));
+    aw->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+
+    if (auto* ed = aw->getTextEditor("name"))
+    {
+        ed->selectAll();
+        juce::MessageManager::callAsync([weak = juce::Component::SafePointer<juce::TextEditor>(ed)]
+        {
+            if (weak != nullptr) weak->grabKeyboardFocus();
+        });
+    }
+
+    aw->enterModalState(true,
+        juce::ModalCallbackFunction::create([this, rowNumber, aw](int result)
+        {
+            std::unique_ptr<juce::AlertWindow> owner(aw);
+            if (result != 1) return;
+            if (rowNumber < 0 || rowNumber >= static_cast<int>(results.size())) return;
+
+            results[static_cast<size_t>(rowNumber)].config.name = aw->getTextEditorContents("name");
+            table.repaintRow(rowNumber);
+            if (rowNumber == static_cast<int>(results.size()) - 1)
+                updateLatestStats();
+            saveResults(appProperties);
+        }), false);
+}
+
 void ResultsTab::selectedRowsChanged(int /*lastRowSelected*/)
 {
     if (selectionCallback)

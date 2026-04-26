@@ -6,6 +6,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_subdirectory(C:/JUCE ${CMAKE_BINARY_DIR}/JUCE)
 
+set_property(DIRECTORY PROPERTY VS_STARTUP_PROJECT Aconcagua)
+
 juce_add_gui_app(Aconcagua
     PRODUCT_NAME "Aconcagua"
     COMPANY_NAME "Aconcagua"
