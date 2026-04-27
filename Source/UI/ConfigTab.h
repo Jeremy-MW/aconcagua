@@ -30,6 +30,8 @@ private:
     void loadPluginFromFile(const juce::File& file);
     void saveParameters();
     void restoreParameters();
+    void saveCurrentPluginState();
+    void restorePluginStateForFile(const juce::File& file);
     void updateMidiControls();
 
     // Re-prepares the loaded plugin with current UI settings and (re)starts
@@ -54,6 +56,7 @@ private:
     juce::TextButton loadButton { "Load Plugin" };
     juce::Label pluginNameLabel;
     std::unique_ptr<juce::FileChooser> fileChooser;
+    juce::File currentPluginFile;
 
     // Parameters
     juce::Label nameLabel            { {}, "Name" };

@@ -47,22 +47,29 @@ MainWindow::MainContent::MainContent(juce::ApplicationProperties& properties)
     tabs.addTab("Histogram", tabColour, &histogramTab, false);
     addAndMakeVisible(tabs);
 
-    configTab.onBenchmarkComplete([this](BenchmarkResult result)
+    configTab.onBenchmarkComplete([weak = juce::Component::SafePointer<MainContent>(this)](BenchmarkResult result)
     {
-        resultsTab.addResult(std::move(result));
-        resultsTab.setRetestEnabled(true);
-        tabs.setCurrentTabIndex(1);
+        if (weak == nullptr)
+            return;
+
+        weak->resultsTab.addResult(std::move(result));
+        weak->resultsTab.setRetestEnabled(true);
+        weak->tabs.setCurrentTabIndex(1);
     });
 
-    resultsTab.onSelectionChanged([this](const BenchmarkResult* result)
+    resultsTab.onSelectionChanged([weak = juce::Component::SafePointer<MainContent>(this)](const BenchmarkResult* result)
     {
-        histogramTab.setResult(result);
+        if (weak != nullptr)
+            weak->histogramTab.setResult(result);
     });
 
-    resultsTab.onRetest([this]
+    resultsTab.onRetest([weak = juce::Component::SafePointer<MainContent>(this)]
     {
-        configTab.triggerBenchmark();
-        resultsTab.setRetestEnabled(false);
+        if (weak == nullptr)
+            return;
+
+        weak->configTab.triggerBenchmark();
+        weak->resultsTab.setRetestEnabled(false);
     });
 
     // Restore previous session results

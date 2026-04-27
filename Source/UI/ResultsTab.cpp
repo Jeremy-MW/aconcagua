@@ -1,5 +1,7 @@
 #include "ResultsTab.h"
+#include <algorithm>
 #include <optional>
+#include <numeric>
 
 namespace
 {
@@ -51,6 +53,43 @@ namespace
         return InputType::Noise;
     }
 
+    juce::StringArray parseCsvLine(const juce::String& line)
+    {
+        juce::StringArray cells;
+        juce::String cell;
+        bool inQuotes = false;
+
+        for (int i = 0; i < line.length(); ++i)
+        {
+            const auto c = line[i];
+
+            if (c == '"')
+            {
+                if (inQuotes && i + 1 < line.length() && line[i + 1] == '"')
+                {
+                    cell << '"';
+                    ++i;
+                }
+                else
+                {
+                    inQuotes = ! inQuotes;
+                }
+            }
+            else if (c == ',' && ! inQuotes)
+            {
+                cells.add(cell);
+                cell.clear();
+            }
+            else
+            {
+                cell << c;
+            }
+        }
+
+        cells.add(cell);
+        return cells;
+    }
+
     // Comparison CSV (Export All) — one row per result, summary fields only.
     // Returns possibly-empty vector. Handles legacy "Channels" header.
     std::vector<BenchmarkResult> parseExportedComparisonCsv(const juce::File& file)
@@ -64,7 +103,7 @@ namespace
         if (lines.isEmpty()) return out;
 
         juce::StringArray headers;
-        headers.addTokens(lines[0], ",", "");
+        headers = parseCsvLine(lines[0]);
         for (auto& h : headers) h = h.trim();
 
         auto col = [&](juce::StringRef name)
@@ -105,7 +144,7 @@ namespace
             if (row.isEmpty()) continue;
 
             juce::StringArray cells;
-            cells.addTokens(row, ",", "");
+            cells = parseCsvLine(row);
 
             BenchmarkResult r;
             r.config.name = cell(cells, cName);
@@ -190,12 +229,12 @@ namespace
                     continue;
                 }
 
-                const int comma = line.indexOfChar(',');
-                if (comma < 0)
+                auto cells = parseCsvLine(line);
+                if (cells.size() < 2)
                     continue;
 
-                const auto key = line.substring(0, comma).trim();
-                const auto val = line.substring(comma + 1).trim();
+                const auto key = cells[0].trim();
+                const auto val = cells[1].trim();
 
                 if      (key == "Plugin")          result.pluginName = val;
                 else if (key == "Name")            result.config.name = val;
@@ -256,6 +295,19 @@ namespace
         result.computeStats();
         return result;
     }
+
+    int compareStrings(const juce::String& a, const juce::String& b)
+    {
+        return a.compareIgnoreCase(b);
+    }
+
+    template <typename Value>
+    int compareValues(Value a, Value b)
+    {
+        if (a < b) return -1;
+        if (b < a) return 1;
+        return 0;
+    }
 }
 
 ResultsTab::ResultsTab(juce::ApplicationProperties& properties)
@@ -283,6 +335,7 @@ ResultsTab::ResultsTab(juce::ApplicationProperties& properties)
     table.getHeader().addColumn("Avg %",       AvgBudgetCol,   55);
     table.getHeader().addColumn("Peak %",      MaxBudgetCol,   55);
     table.getHeader().addColumn("Over",        OverBudgetCol,  45);
+    table.getHeader().setSortColumnId(RunCol, true);
 
     table.setColour(juce::ListBox::backgroundColourId, juce::Colour(0xff1e1e2e));
     table.addMouseListener(this, true);
@@ -352,27 +405,33 @@ void ResultsTab::paint(juce::Graphics& g)
 void ResultsTab::addResult(BenchmarkResult result)
 {
     results.push_back(std::move(result));
+    applyCurrentSortToDisplayOrder();
     table.updateContent();
-    table.selectRow(static_cast<int>(results.size()) - 1);
+    selectResultIndex(results.size() - 1);
     updateLatestStats();
+    saveResults(appProperties);
 }
 
 void ResultsTab::clearResults()
 {
     results.clear();
+    displayOrder.clear();
     table.deselectAllRows();
     table.updateContent();
     latestStatsLabel.setText("No results yet.", juce::dontSendNotification);
 
     if (selectionCallback)
         selectionCallback(nullptr);
+
+    saveResults(appProperties);
 }
 
 const BenchmarkResult* ResultsTab::getSelectedResult() const
 {
     auto row = table.getSelectedRow();
-    if (row >= 0 && row < static_cast<int>(results.size()))
-        return &results[static_cast<size_t>(row)];
+    const auto resultIndex = getResultIndexForRow(row);
+    if (resultIndex < results.size())
+        return &results[resultIndex];
     return nullptr;
 }
 
@@ -396,17 +455,18 @@ void ResultsTab::paintRowBackground(juce::Graphics& g, int /*rowNumber*/, int wi
 void ResultsTab::paintCell(juce::Graphics& g, int rowNumber, int columnId,
                            int width, int height, bool /*rowIsSelected*/)
 {
-    if (rowNumber < 0 || rowNumber >= static_cast<int>(results.size()))
+    const auto resultIndex = getResultIndexForRow(rowNumber);
+    if (resultIndex >= results.size())
         return;
 
-    const auto& r = results[static_cast<size_t>(rowNumber)];
+    const auto& r = results[resultIndex];
     g.setColour(juce::Colour(0xffcdd6f4));
     g.setFont(13.0f);
 
     juce::String text;
     switch (columnId)
     {
-        case RunCol:        text = juce::String(rowNumber + 1); break;
+        case RunCol:        text = juce::String(static_cast<int>(resultIndex) + 1); break;
         case NameCol:       text = r.config.name; break;
         case DateTimeCol:   text = r.getCompletedAtDisplayString(); break;
         case PluginCol:     text = r.pluginName; break;
@@ -459,18 +519,32 @@ void ResultsTab::mouseDown(const juce::MouseEvent& event)
 
 void ResultsTab::cellDoubleClicked(int rowNumber, int columnId, const juce::MouseEvent&)
 {
-    if (columnId == NameCol)
+    if (columnId == RunCol)
+        editPositionAtRow(rowNumber);
+    else if (columnId == NameCol)
         editNameAtRow(rowNumber);
+}
+
+void ResultsTab::sortOrderChanged(int, bool)
+{
+    const auto selectedIndex = getResultIndexForRow(table.getSelectedRow());
+
+    applyCurrentSortToDisplayOrder();
+    table.updateContent();
+
+    if (selectedIndex < results.size())
+        selectResultIndex(selectedIndex);
 }
 
 void ResultsTab::editNameAtRow(int rowNumber)
 {
-    if (rowNumber < 0 || rowNumber >= static_cast<int>(results.size()))
+    const auto resultIndex = getResultIndexForRow(rowNumber);
+    if (resultIndex >= results.size())
         return;
 
     auto* aw = new juce::AlertWindow("Rename run", "Enter a new name:",
                                      juce::MessageBoxIconType::NoIcon, this);
-    aw->addTextEditor("name", results[static_cast<size_t>(rowNumber)].config.name);
+    aw->addTextEditor("name", results[resultIndex].config.name);
     aw->addButton("OK",     1, juce::KeyPress(juce::KeyPress::returnKey));
     aw->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
 
@@ -484,15 +558,17 @@ void ResultsTab::editNameAtRow(int rowNumber)
     }
 
     aw->enterModalState(true,
-        juce::ModalCallbackFunction::create([this, rowNumber, aw](int result)
+        juce::ModalCallbackFunction::create([this, resultIndex, aw](int result)
         {
             std::unique_ptr<juce::AlertWindow> owner(aw);
             if (result != 1) return;
-            if (rowNumber < 0 || rowNumber >= static_cast<int>(results.size())) return;
+            if (resultIndex >= results.size()) return;
 
-            results[static_cast<size_t>(rowNumber)].config.name = aw->getTextEditorContents("name");
-            table.repaintRow(rowNumber);
-            if (rowNumber == static_cast<int>(results.size()) - 1)
+            results[resultIndex].config.name = aw->getTextEditorContents("name");
+            applyCurrentSortToDisplayOrder();
+            table.updateContent();
+            selectResultIndex(resultIndex);
+            if (resultIndex == results.size() - 1)
                 updateLatestStats();
             saveResults(appProperties);
         }), false);
@@ -530,12 +606,146 @@ void ResultsTab::updateLatestStats()
     latestStatsLabel.setText(stats, juce::dontSendNotification);
 }
 
-void ResultsTab::deleteResultAtRow(int rowNumber)
+void ResultsTab::rebuildDisplayOrder()
 {
-    if (rowNumber < 0 || rowNumber >= static_cast<int>(results.size()))
+    displayOrder.resize(results.size());
+    std::iota(displayOrder.begin(), displayOrder.end(), size_t{0});
+}
+
+void ResultsTab::applyCurrentSortToDisplayOrder()
+{
+    rebuildDisplayOrder();
+
+    const auto sortColumn = table.getHeader().getSortColumnId();
+    if (sortColumn == 0)
         return;
 
-    results.erase(results.begin() + rowNumber);
+    const auto forwards = table.getHeader().isSortedForwards();
+
+    std::stable_sort(displayOrder.begin(), displayOrder.end(),
+        [this, sortColumn, forwards](size_t lhsIndex, size_t rhsIndex)
+        {
+            const auto& lhs = results[lhsIndex];
+            const auto& rhs = results[rhsIndex];
+
+            int result = 0;
+            switch (sortColumn)
+            {
+                case RunCol:        result = compareValues(lhsIndex, rhsIndex); break;
+                case NameCol:       result = compareStrings(lhs.config.name, rhs.config.name); break;
+                case DateTimeCol:   result = compareValues(lhs.completedAtMsSinceEpoch, rhs.completedAtMsSinceEpoch); break;
+                case PluginCol:     result = compareStrings(lhs.pluginName, rhs.pluginName); break;
+                case BlockSizeCol:  result = compareValues(lhs.config.blockSize, rhs.config.blockSize); break;
+                case SampleRateCol: result = compareValues(lhs.config.sampleRate, rhs.config.sampleRate); break;
+                case ChannelsCol:
+                    result = compareValues(lhs.config.numInputChannels, rhs.config.numInputChannels);
+                    if (result == 0)
+                        result = compareValues(lhs.config.numOutputChannels, rhs.config.numOutputChannels);
+                    break;
+                case NotesCol:      result = compareValues(lhs.config.numMidiNotes, rhs.config.numMidiNotes); break;
+                case TotalCol:      result = compareValues(lhs.totalMs, rhs.totalMs); break;
+                case AvgCol:        result = compareValues(lhs.avgUs, rhs.avgUs); break;
+                case MinCol:        result = compareValues(lhs.minUs, rhs.minUs); break;
+                case MaxCol:        result = compareValues(lhs.maxUs, rhs.maxUs); break;
+                case BudgetCol:     result = compareValues(lhs.budgetUs, rhs.budgetUs); break;
+                case StdDevCol:     result = compareValues(lhs.stdDevUs, rhs.stdDevUs); break;
+                case SpikesCol:     result = compareValues(lhs.spikeCount, rhs.spikeCount); break;
+                case AvgBudgetCol:  result = compareValues(lhs.avgBudgetPercent, rhs.avgBudgetPercent); break;
+                case MaxBudgetCol:  result = compareValues(lhs.maxBudgetPercent, rhs.maxBudgetPercent); break;
+                case OverBudgetCol: result = compareValues(lhs.overBudgetCount, rhs.overBudgetCount); break;
+                default:            result = compareValues(lhsIndex, rhsIndex); break;
+            }
+
+            if (result == 0)
+                return lhsIndex < rhsIndex;
+
+            return forwards ? result < 0 : result > 0;
+        });
+}
+
+size_t ResultsTab::getResultIndexForRow(int rowNumber) const
+{
+    if (rowNumber < 0 || rowNumber >= static_cast<int>(displayOrder.size()))
+        return results.size();
+
+    return displayOrder[static_cast<size_t>(rowNumber)];
+}
+
+int ResultsTab::getRowForResultIndex(size_t resultIndex) const
+{
+    for (size_t row = 0; row < displayOrder.size(); ++row)
+        if (displayOrder[row] == resultIndex)
+            return static_cast<int>(row);
+
+    return -1;
+}
+
+void ResultsTab::selectResultIndex(size_t resultIndex)
+{
+    const auto row = getRowForResultIndex(resultIndex);
+    if (row >= 0)
+        table.selectRow(row);
+}
+
+void ResultsTab::editPositionAtRow(int rowNumber)
+{
+    const auto sourceIndex = getResultIndexForRow(rowNumber);
+    if (sourceIndex >= results.size() || results.size() < 2)
+        return;
+
+    auto* aw = new juce::AlertWindow("Move run", "Enter a new position:",
+                                     juce::MessageBoxIconType::NoIcon, this);
+    aw->addTextEditor("position", juce::String(static_cast<int>(sourceIndex) + 1));
+    aw->addButton("OK",     1, juce::KeyPress(juce::KeyPress::returnKey));
+    aw->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+
+    if (auto* ed = aw->getTextEditor("position"))
+    {
+        ed->setInputRestrictions(6, "0123456789");
+        ed->selectAll();
+        juce::MessageManager::callAsync([weak = juce::Component::SafePointer<juce::TextEditor>(ed)]
+        {
+            if (weak != nullptr) weak->grabKeyboardFocus();
+        });
+    }
+
+    aw->enterModalState(true,
+        juce::ModalCallbackFunction::create([this, sourceIndex, aw](int result)
+        {
+            std::unique_ptr<juce::AlertWindow> owner(aw);
+            if (result != 1) return;
+            if (sourceIndex >= results.size()) return;
+
+            const auto enteredPosition = aw->getTextEditorContents("position").getIntValue();
+            if (enteredPosition <= 0)
+                return;
+
+            const auto targetIndex = static_cast<size_t>(
+                juce::jlimit(1, static_cast<int>(results.size()), enteredPosition) - 1);
+
+            if (targetIndex == sourceIndex)
+                return;
+
+            auto moved = std::move(results[sourceIndex]);
+            results.erase(results.begin() + static_cast<std::ptrdiff_t>(sourceIndex));
+            results.insert(results.begin() + static_cast<std::ptrdiff_t>(targetIndex), std::move(moved));
+
+            applyCurrentSortToDisplayOrder();
+            table.updateContent();
+            selectResultIndex(targetIndex);
+            updateLatestStats();
+            saveResults(appProperties);
+        }), false);
+}
+
+void ResultsTab::deleteResultAtRow(int rowNumber)
+{
+    const auto resultIndex = getResultIndexForRow(rowNumber);
+    if (resultIndex >= results.size())
+        return;
+
+    results.erase(results.begin() + static_cast<std::ptrdiff_t>(resultIndex));
+    applyCurrentSortToDisplayOrder();
     table.updateContent();
 
     if (results.empty())
@@ -546,12 +756,14 @@ void ResultsTab::deleteResultAtRow(int rowNumber)
         if (selectionCallback)
             selectionCallback(nullptr);
 
+        saveResults(appProperties);
         return;
     }
 
     const auto rowToSelect = juce::jlimit(0, static_cast<int>(results.size()) - 1, rowNumber);
     table.selectRow(rowToSelect);
     updateLatestStats();
+    saveResults(appProperties);
 }
 
 void ResultsTab::showDeleteMenuForRow(int rowNumber, juce::Component* targetComponent)
@@ -652,16 +864,18 @@ void ResultsTab::exportRunClicked()
     if (selected == nullptr)
         return;
 
+    auto selectedSnapshot = *selected;
     fileChooser = std::make_unique<juce::FileChooser>(
         "Export Run to CSV", getStartDir(appProperties), "*.csv");
 
-    fileChooser->launchAsync(juce::FileBrowserComponent::saveMode, [this, selected](const juce::FileChooser& fc)
+    fileChooser->launchAsync(juce::FileBrowserComponent::saveMode,
+        [this, selectedSnapshot = std::move(selectedSnapshot)](const juce::FileChooser& fc)
     {
         auto file = fc.getResult();
         if (file != juce::File{})
         {
             rememberDir(appProperties, file);
-            ResultsExporter::exportRun(*selected, file);
+            ResultsExporter::exportRun(selectedSnapshot, file);
         }
     });
 }
@@ -711,10 +925,11 @@ void ResultsTab::restoreResults(juce::ApplicationProperties& props)
                 results.push_back(std::move(result));
             }
 
+            applyCurrentSortToDisplayOrder();
             table.updateContent();
             if (!results.empty())
             {
-                table.selectRow(static_cast<int>(results.size()) - 1);
+                selectResultIndex(results.size() - 1);
                 updateLatestStats();
             }
         }

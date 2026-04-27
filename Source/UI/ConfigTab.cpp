@@ -35,6 +35,20 @@ namespace
         return 0;
     }
 
+    int selectedSampleRateForBox(const juce::ComboBox& box)
+    {
+        const int id = box.getSelectedId();
+        if (id < 1 || id > (int) std::size(kSampleRates))
+            return kSampleRates[0];
+
+        return kSampleRates[id - 1];
+    }
+
+    juce::String pluginStateKeyForFile(const juce::File& file)
+    {
+        return "pluginState." + juce::String::toHexString(file.getFullPathName().toLowerCase().hashCode64());
+    }
+
     // DocumentWindow whose close button triggers a caller-supplied callback,
     // instead of the default JUCEApplicationBase::quit() behaviour.
     class EditorHostWindow : public juce::DocumentWindow
@@ -55,9 +69,10 @@ ConfigTab::ConfigTab(PluginLoader& loader, BenchmarkEngine& engine, juce::Applic
     if (auto* props = appProperties.getUserSettings())
         savedAudio = props->getValue("audioDeviceState", "");
 
-    liveAudio.onDeviceConfigChanged = [this](double sr, int bs)
+    liveAudio.onDeviceConfigChanged = [weak = juce::Component::SafePointer<ConfigTab>(this)](double sr, int bs)
     {
-        seedConfigFromDevice(sr, bs);
+        if (weak != nullptr)
+            weak->seedConfigFromDevice(sr, bs);
     };
     liveAudio.initialise(savedAudio);
     liveAudio.attach();
@@ -178,6 +193,13 @@ ConfigTab::ConfigTab(PluginLoader& loader, BenchmarkEngine& engine, juce::Applic
 
 ConfigTab::~ConfigTab()
 {
+    if (benchmarkEngine.isRunning())
+    {
+        benchmarkEngine.signalThreadShouldExit();
+        benchmarkEngine.stopThread(5000);
+    }
+
+    saveCurrentPluginState();
     saveParameters();
     stopProcessingAndRelease();
 }
@@ -252,6 +274,7 @@ void ConfigTab::paint(juce::Graphics& g)
 void ConfigTab::loadPluginFromFile(const juce::File& file)
 {
     editorWindow.reset();
+    saveCurrentPluginState();
     stopProcessingAndRelease();
 
     pluginLoader.loadPlugin(file, [this, file](const juce::String& error)
@@ -263,6 +286,8 @@ void ConfigTab::loadPluginFromFile(const juce::File& file)
             goButton.setEnabled(true);
             showEditorButton.setEnabled(true);
             updateMidiControls();
+            currentPluginFile = file;
+            restorePluginStateForFile(file);
 
             if (auto* props = appProperties.getUserSettings())
             {
@@ -276,8 +301,10 @@ void ConfigTab::loadPluginFromFile(const juce::File& file)
         else
         {
             pluginNameLabel.setText(error, juce::dontSendNotification);
-            goButton.setEnabled(false);
-            showEditorButton.setEnabled(false);
+            goButton.setEnabled(pluginLoader.isPluginLoaded());
+            showEditorButton.setEnabled(pluginLoader.isPluginLoaded());
+            updateMidiControls();
+            applyPlayConfigAndResumeProcessing();
         }
     });
 }
@@ -342,24 +369,27 @@ void ConfigTab::goClicked()
         pluginLoader.getPluginInstance(),
         pluginLoader.getPluginName(),
         config,
-        [this](BenchmarkResult result)
+        [weak = juce::Component::SafePointer<ConfigTab>(this)](BenchmarkResult result)
         {
-            goButton.setEnabled(true);
-            loadButton.setEnabled(true);
-            statusLabel.setText("Complete: " + juce::String(result.totalMs, 1) + " ms total, "
-                                + juce::String(result.avgUs, 1) + " us avg",
-                                juce::dontSendNotification);
+            if (weak == nullptr)
+                return;
+
+            weak->goButton.setEnabled(true);
+            weak->loadButton.setEnabled(true);
+            weak->statusLabel.setText("Complete: " + juce::String(result.totalMs, 1) + " ms total, "
+                                      + juce::String(result.avgUs, 1) + " us avg",
+                                      juce::dontSendNotification);
 
             // Re-release: live or pump path will re-prepare with its own SR/BS.
-            if (pluginIsPrepared)
+            if (weak->pluginIsPrepared)
             {
-                pluginLoader.releasePlugin();
-                pluginIsPrepared = false;
+                weak->pluginLoader.releasePlugin();
+                weak->pluginIsPrepared = false;
             }
-            applyPlayConfigAndResumeProcessing();
+            weak->applyPlayConfigAndResumeProcessing();
 
-            if (benchmarkCompleteCallback)
-                benchmarkCompleteCallback(std::move(result));
+            if (weak->benchmarkCompleteCallback)
+                weak->benchmarkCompleteCallback(std::move(result));
         });
 }
 
@@ -370,7 +400,7 @@ BenchmarkConfig ConfigTab::gatherConfig() const
     cfg.blockSize = static_cast<int>(blockSizeSlider.getValue());
     cfg.numBlocks = static_cast<int>(numBlocksSlider.getValue());
 
-    cfg.sampleRate = kSampleRates[sampleRateBox.getSelectedId() - 1];
+    cfg.sampleRate = selectedSampleRateForBox(sampleRateBox);
 
     cfg.numInputChannels  = channelCountForId(inputChannelsBox.getSelectedId());
     cfg.numOutputChannels = channelCountForId(outputChannelsBox.getSelectedId());
@@ -516,7 +546,11 @@ void ConfigTab::toggleEditorClicked()
 
     host->onCloseButton = [this]
     {
-        juce::MessageManager::callAsync([this] { editorWindow.reset(); });
+        juce::MessageManager::callAsync([weak = juce::Component::SafePointer<ConfigTab>(this)]
+        {
+            if (weak != nullptr)
+                weak->editorWindow.reset();
+        });
     };
 
     host->setUsingNativeTitleBar(true);
@@ -543,6 +577,45 @@ void ConfigTab::saveParameters()
         props->setValue("liveAudioActive",   liveAudioToggle.getToggleState());
         props->setValue("audioDeviceState",  liveAudio.getStateAsXmlString());
         props->saveIfNeeded();
+    }
+}
+
+void ConfigTab::saveCurrentPluginState()
+{
+    if (! pluginLoader.isPluginLoaded() || currentPluginFile == juce::File{})
+        return;
+
+    // Detach realtime callers before asking the plugin to serialise itself.
+    liveAudio.setPlugin(nullptr, 0, 0);
+    idlePump.stop();
+
+    juce::MemoryBlock state;
+    pluginLoader.getPluginInstance()->getStateInformation(state);
+
+    if (auto* props = appProperties.getUserSettings())
+    {
+        props->setValue(pluginStateKeyForFile(currentPluginFile), state.toBase64Encoding());
+        props->saveIfNeeded();
+    }
+}
+
+void ConfigTab::restorePluginStateForFile(const juce::File& file)
+{
+    if (! pluginLoader.isPluginLoaded())
+        return;
+
+    juce::String encodedState;
+    if (auto* props = appProperties.getUserSettings())
+        encodedState = props->getValue(pluginStateKeyForFile(file), {});
+
+    if (encodedState.isEmpty())
+        return;
+
+    juce::MemoryBlock state;
+    if (state.fromBase64Encoding(encodedState) && state.getSize() > 0)
+    {
+        pluginLoader.getPluginInstance()->setStateInformation(state.getData(),
+                                                              static_cast<int>(state.getSize()));
     }
 }
 

@@ -7,8 +7,6 @@ PluginLoader::PluginLoader()
 
 void PluginLoader::loadPlugin(const juce::File& vst3File, Callback onComplete)
 {
-    unloadPlugin();
-
     juce::OwnedArray<juce::PluginDescription> descriptions;
     juce::VST3PluginFormat vst3;
     vst3.findAllTypesForFile(descriptions, vst3File.getFullPathName());
@@ -19,17 +17,21 @@ void PluginLoader::loadPlugin(const juce::File& vst3File, Callback onComplete)
         return;
     }
 
-    pluginDescription = *descriptions[0];
+    auto newDescription = *descriptions[0];
     juce::String errorMessage;
 
-    pluginInstance = formatManager.createPluginInstance(
-        pluginDescription, 44100.0, 512, errorMessage);
+    auto newPluginInstance = formatManager.createPluginInstance(
+        newDescription, 44100.0, 512, errorMessage);
 
-    if (pluginInstance == nullptr)
+    if (newPluginInstance == nullptr)
     {
         onComplete("Failed to load plugin: " + errorMessage);
         return;
     }
+
+    unloadPlugin();
+    pluginDescription = newDescription;
+    pluginInstance = std::move(newPluginInstance);
 
     onComplete({});
 }

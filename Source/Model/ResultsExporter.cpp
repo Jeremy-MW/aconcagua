@@ -1,13 +1,27 @@
 #include "ResultsExporter.h"
 
+namespace
+{
+    juce::String csvCell(juce::String text)
+    {
+        if (text.containsAnyOf(",\"\r\n"))
+        {
+            text = text.replace("\"", "\"\"");
+            return "\"" + text + "\"";
+        }
+
+        return text;
+    }
+}
+
 bool ResultsExporter::exportRun(const BenchmarkResult& result, const juce::File& file)
 {
     juce::String csv;
 
     // Summary header
-    csv << "Name," << result.config.name << "\n";
-    csv << "Plugin," << result.pluginName << "\n";
-    csv << "Date/Time," << result.getCompletedAtDisplayString() << "\n";
+    csv << "Name," << csvCell(result.config.name) << "\n";
+    csv << "Plugin," << csvCell(result.pluginName) << "\n";
+    csv << "Date/Time," << csvCell(result.getCompletedAtDisplayString()) << "\n";
     csv << "Block Size," << result.config.blockSize << "\n";
     csv << "Sample Rate," << static_cast<int>(result.config.sampleRate) << "\n";
     csv << "Input Channels," << result.config.numInputChannels << "\n";
@@ -53,9 +67,9 @@ bool ResultsExporter::exportComparison(const std::vector<BenchmarkResult>& resul
     {
         const auto& r = results[i];
         csv << static_cast<int>(i + 1) << ","
-            << r.config.name << ","
-            << r.getCompletedAtDisplayString() << ","
-            << r.pluginName << ","
+            << csvCell(r.config.name) << ","
+            << csvCell(r.getCompletedAtDisplayString()) << ","
+            << csvCell(r.pluginName) << ","
             << r.config.blockSize << ","
             << static_cast<int>(r.config.sampleRate) << ","
             << r.config.numInputChannels << ","

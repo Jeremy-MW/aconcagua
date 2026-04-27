@@ -7,7 +7,11 @@ HistogramTab::HistogramTab()
 
 void HistogramTab::setResult(const BenchmarkResult* result)
 {
-    currentResult = result;
+    if (result != nullptr)
+        currentResult = *result;
+    else
+        currentResult.reset();
+
     repaint();
 }
 
@@ -19,7 +23,7 @@ void HistogramTab::paint(juce::Graphics& g)
 {
     g.fillAll(juce::Colour(0xff1e1e2e));
 
-    if (currentResult == nullptr || currentResult->blockTimingsMicroseconds.empty())
+    if (! currentResult.has_value() || currentResult->blockTimingsMicroseconds.empty())
     {
         g.setColour(juce::Colour(0xffa6adc8));
         g.setFont(16.0f);

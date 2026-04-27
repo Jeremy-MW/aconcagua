@@ -32,6 +32,7 @@ public:
     void paintCell(juce::Graphics& g, int rowNumber, int columnId, int width, int height, bool rowIsSelected) override;
     void selectedRowsChanged(int lastRowSelected) override;
     void cellDoubleClicked(int rowNumber, int columnId, const juce::MouseEvent& event) override;
+    void sortOrderChanged(int newSortColumnId, bool isForwards) override;
 
 private:
     void mouseDown(const juce::MouseEvent& event) override;
@@ -60,6 +61,7 @@ private:
 
     juce::ApplicationProperties& appProperties;
     std::vector<BenchmarkResult> results;
+    std::vector<size_t> displayOrder;
 
     // Latest run stats panel
     juce::Label latestStatsLabel;
@@ -78,6 +80,12 @@ private:
     RetestCallback retestCallback;
 
     void updateLatestStats();
+    void rebuildDisplayOrder();
+    void applyCurrentSortToDisplayOrder();
+    size_t getResultIndexForRow(int rowNumber) const;
+    int getRowForResultIndex(size_t resultIndex) const;
+    void selectResultIndex(size_t resultIndex);
+    void editPositionAtRow(int rowNumber);
     void deleteResultAtRow(int rowNumber);
     void editNameAtRow(int rowNumber);
     void showDeleteMenuForRow(int rowNumber, juce::Component* targetComponent);

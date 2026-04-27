@@ -1,6 +1,7 @@
 #pragma once
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "../Model/BenchmarkResult.h"
+#include <optional>
 
 class HistogramTab : public juce::Component
 {
@@ -12,7 +13,7 @@ public:
     void setResult(const BenchmarkResult* result);
 
 private:
-    const BenchmarkResult* currentResult = nullptr;
+    std::optional<BenchmarkResult> currentResult;
 
     static constexpr int numBins = 50;
 
