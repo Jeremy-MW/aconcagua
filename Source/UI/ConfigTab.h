@@ -32,6 +32,8 @@ private:
     void restoreParameters();
     void saveCurrentPluginState();
     void restorePluginStateForFile(const juce::File& file);
+    void saveCurrentPluginEditorWindowState();
+    void restorePluginEditorWindowStateForFile(const juce::File& file, juce::DocumentWindow& window);
     void updateMidiControls();
 
     // Re-prepares the loaded plugin with current UI settings and (re)starts

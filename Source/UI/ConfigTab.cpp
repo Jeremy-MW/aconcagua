@@ -49,6 +49,55 @@ namespace
         return "pluginState." + juce::String::toHexString(file.getFullPathName().toLowerCase().hashCode64());
     }
 
+    juce::String pluginEditorWindowBoundsKeyForFile(const juce::File& file)
+    {
+        return "pluginEditorWindowBounds." + juce::String::toHexString(file.getFullPathName().toLowerCase().hashCode64());
+    }
+
+    juce::String boundsToString(juce::Rectangle<int> bounds)
+    {
+        return juce::String(bounds.getX()) + ","
+             + juce::String(bounds.getY()) + ","
+             + juce::String(bounds.getWidth()) + ","
+             + juce::String(bounds.getHeight());
+    }
+
+    juce::Rectangle<int> boundsFromString(const juce::String& text)
+    {
+        juce::StringArray parts;
+        parts.addTokens(text, ",", "");
+
+        if (parts.size() != 4)
+            return {};
+
+        return { parts[0].getIntValue(),
+                 parts[1].getIntValue(),
+                 parts[2].getIntValue(),
+                 parts[3].getIntValue() };
+    }
+
+    juce::Rectangle<int> clampBoundsToDisplays(juce::Rectangle<int> bounds)
+    {
+        const auto displays = juce::Desktop::getInstance().getDisplays();
+        const auto displayArea = displays.getDisplayForRect(bounds) != nullptr
+                                   ? displays.getDisplayForRect(bounds)->userArea
+                                   : displays.getPrimaryDisplay()->userArea;
+
+        bounds.setSize(juce::jmin(bounds.getWidth(), displayArea.getWidth()),
+                       juce::jmin(bounds.getHeight(), displayArea.getHeight()));
+
+        if (bounds.getRight() > displayArea.getRight())
+            bounds.setX(displayArea.getRight() - bounds.getWidth());
+        if (bounds.getBottom() > displayArea.getBottom())
+            bounds.setY(displayArea.getBottom() - bounds.getHeight());
+        if (bounds.getX() < displayArea.getX())
+            bounds.setX(displayArea.getX());
+        if (bounds.getY() < displayArea.getY())
+            bounds.setY(displayArea.getY());
+
+        return bounds;
+    }
+
     // DocumentWindow whose close button triggers a caller-supplied callback,
     // instead of the default JUCEApplicationBase::quit() behaviour.
     class EditorHostWindow : public juce::DocumentWindow
@@ -199,6 +248,7 @@ ConfigTab::~ConfigTab()
         benchmarkEngine.stopThread(5000);
     }
 
+    saveCurrentPluginEditorWindowState();
     saveCurrentPluginState();
     saveParameters();
     stopProcessingAndRelease();
@@ -273,6 +323,7 @@ void ConfigTab::paint(juce::Graphics& g)
 
 void ConfigTab::loadPluginFromFile(const juce::File& file)
 {
+    saveCurrentPluginEditorWindowState();
     editorWindow.reset();
     saveCurrentPluginState();
     stopProcessingAndRelease();
@@ -528,6 +579,7 @@ void ConfigTab::toggleEditorClicked()
 {
     if (editorWindow != nullptr)
     {
+        saveCurrentPluginEditorWindowState();
         editorWindow.reset();
         return;
     }
@@ -549,14 +601,22 @@ void ConfigTab::toggleEditorClicked()
         juce::MessageManager::callAsync([weak = juce::Component::SafePointer<ConfigTab>(this)]
         {
             if (weak != nullptr)
+            {
+                weak->saveCurrentPluginEditorWindowState();
                 weak->editorWindow.reset();
+            }
         });
     };
 
     host->setUsingNativeTitleBar(true);
     host->setContentOwned(editor, true);
     host->setResizable(false, false);
-    host->centreWithSize(editor->getWidth(), editor->getHeight());
+
+    if (currentPluginFile != juce::File{})
+        restorePluginEditorWindowStateForFile(currentPluginFile, *host);
+    else
+        host->centreWithSize(editor->getWidth(), editor->getHeight());
+
     host->setVisible(true);
 
     editorWindow = std::move(host);
@@ -617,6 +677,40 @@ void ConfigTab::restorePluginStateForFile(const juce::File& file)
         pluginLoader.getPluginInstance()->setStateInformation(state.getData(),
                                                               static_cast<int>(state.getSize()));
     }
+}
+
+void ConfigTab::saveCurrentPluginEditorWindowState()
+{
+    if (editorWindow == nullptr || currentPluginFile == juce::File{})
+        return;
+
+    if (auto* props = appProperties.getUserSettings())
+    {
+        props->setValue(pluginEditorWindowBoundsKeyForFile(currentPluginFile),
+                        boundsToString(editorWindow->getBounds()));
+        props->saveIfNeeded();
+    }
+}
+
+void ConfigTab::restorePluginEditorWindowStateForFile(const juce::File& file,
+                                                      juce::DocumentWindow& window)
+{
+    auto* content = window.getContentComponent();
+    const int naturalWidth = content != nullptr ? juce::jmax(1, content->getWidth()) : 600;
+    const int naturalHeight = content != nullptr ? juce::jmax(1, content->getHeight()) : 400;
+
+    juce::String savedBoundsText;
+    if (auto* props = appProperties.getUserSettings())
+        savedBoundsText = props->getValue(pluginEditorWindowBoundsKeyForFile(file), {});
+
+    const auto savedBounds = boundsFromString(savedBoundsText);
+    if (savedBounds.isEmpty())
+    {
+        window.centreWithSize(naturalWidth, naturalHeight);
+        return;
+    }
+
+    window.setBounds(clampBoundsToDisplays(savedBounds.withSizeKeepingCentre(naturalWidth, naturalHeight)));
 }
 
 void ConfigTab::restoreParameters()
